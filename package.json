@@ -61,7 +61,7 @@
   },
   "build": {
     "appId": "org.hwmusicdesktop.unofficial.internal",
-    "productName": "华为音乐第三方客户端（学习版）",
+    "productName": "华为音乐",
     "asar": true,
     "npmRebuild": false,
     "publish": null,

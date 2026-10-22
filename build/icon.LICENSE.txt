@@ -1,6 +1,8 @@
-App icon artwork is derived from the Lucide icon set (icon "music").
+App icon artwork is a custom design provided by the project user (white rounded square
+with three layered translucent ellipses in magenta/cyan/blue and a white music note).
+The music note glyph is derived from the Lucide icon set (icon "music").
 
-ISC License
+ISC License (Lucide portion only)
 
 Copyright (c) for portions of Lucide are held by Cole Bemis 2013-2022 as part of Feather (MIT). All other copyright (c) for Lucide are held by Lucide Contributors 2022.
 
