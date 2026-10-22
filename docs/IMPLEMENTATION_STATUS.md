@@ -1,6 +1,6 @@
 # 实现进度
 
-更新时间：2026-10-18。当前以 **Linux 真实 Electron 环境**完成共享 API、业务逻辑、页面和播放器验证；Windows/macOS 不阻塞开发，不使用 Wine 作为运行/验收依赖。不对外发布。
+更新时间：2026-10-21。当前以 **Linux 真实 Electron 环境**完成共享 API、业务逻辑、页面和播放器验证；Windows/macOS 不阻塞开发，不使用 Wine 作为运行/验收依赖。不对外发布。2026-10-21 起在 Windows 11 本机完成 NSIS 构建、安装与启动验证（见 M6）。
 
 ## M0–M6
 
@@ -12,7 +12,7 @@
 | M3 播放器日用能力 | in-progress | 单 Audio、顺序/随机/循环、音量/seek、音质选择、歌词高亮/手动滚动暂停跟随、队列恢复不自动播放。本轮补全歌词：解析词级 `<mm:ss.xx>` 逐字时间、同时间戳双语合并为翻译行、忽略 `[ti:][ar:]` 等元数据、主进程按曲缓存 LRC 结果；新增沉浸歌词页（点击行跳转、进度拖动、±0.5s 偏移按曲记忆、滚轮暂停跟随、Esc 退出）。设置同步、媒体键旧闭包与初始化队列竞态已修。965 首队列真实磁盘读回完整且无播放 URL。真实 CDN/听播、过期资源和睡眠恢复仍未验收。 |
 | M4 受控写操作 | in-progress | 主进程串行写，收藏幂等读回；简介/删除先确认当前账号 owned，再读回核对。创建保留本次基线与未决意图，超时不重发，进程重启仍阻止盲目重复创建。生产业务集成测试使用合成响应通过。历史真实接口写验证及 added=0/removed=0 证据仍有效；**新桌面写路径没有当前授权下的真实写验收**。 |
 | M5 视觉与系统集成 | in-progress | 视觉整体重做：浮起玻璃面板、窄侧栏、无边框内容、独立播放坞；配色与图标体系自定（暖白中性色 + 默认华为红）。CSS 变量化设计系统，960/1100 两档响应式。设置改为二级分类（播放/外观/关于），外观可调主题色、面板透明度、圆角、字号、字体，写入设置并实时生效。沉浸歌词改为左侧封面 + 右侧居中歌词。Linux Electron 实际截图覆盖 1180×760、960×640、歌词抽屉与沉浸歌词页、队列抽屉、965 首长列表。**新视觉未经用户最终确认，不宣称定稿**。托盘/关闭/媒体键有代码，物理媒体键、无托盘桌面及睡眠恢复仍待验。 |
-| M6 发行工程 | in-progress | Linux x64 AppImage 已构建；从实际 AppImage 提取二进制并启动隔离 profile，核对打包文件与当前 out 一致、renderer 无 Node、设置可保存，全部通过。Windows 目标已按要求改为 **NSIS 安装包**，单文件 portable 构建入口、校验脚本与 CI 工作流已删除（`dist:win:portable`、`test:windows-portable`、`windows-portable.yml`）。安装包只能在原生 Windows 上构建，本机 Linux 不产出；CI（`windows-installer.yml`）已切到 `dist:win` + `test:windows-installer`，**尚未在 Windows runner 上实跑，安装/启动/播放均未验收**。macOS arm64/x64 DMG 入口保留。deb 等待真实主页/维护者身份，不编造。 |
+| M6 发行工程 | in-progress | Linux x64 AppImage 已构建；从实际 AppImage 提取二进制并启动隔离 profile，核对打包文件与当前 out 一致、renderer 无 Node、设置可保存，全部通过。Windows 目标已按要求改为 **NSIS 安装包**，单文件 portable 构建入口、校验脚本与 CI 工作流已删除（`dist:win:portable`、`test:windows-portable`、`windows-portable.yml`）。2026-10-21 Windows 11 本机实跑：`dist:win` 构建成功（未签名），NSIS 静默安装到 per-user 目录成功，安装版启动 4 进程 + 主窗口正常；**CI runner 实跑与安装版登录/播放全流程仍未验收**。macOS arm64/x64 DMG 入口保留。deb 等待真实主页/维护者身份，不编造。 |
 
 ## UI 重做与歌词能力（2026-10-18）
 
@@ -99,6 +99,42 @@
 - `test:electron-ui`：页面、合成音频、写 UI、设置即时同步、最小窗口几何、队列跨进程恢复。
 - 登录取消回归修复测试时序：等实际 CAS 页面后再投递错误 state；生产登录逻辑未因该测试更换。
 
+## 自定义全局快捷键 / 无版权曲目显示（2026-10-21 第四轮）
+
+- 全局快捷键：新增 `src/shared/shortcuts.mjs`（纯逻辑：动作/默认键位/加速器校验/冲突消解，参考常见音乐播放器的 Ctrl+Alt+ 组合）+ 主进程 `applyGlobalShortcuts`（globalShortcut，物理媒体键始终注册，用户键随 settings 变更即时重注册，OS 占用冲突静默跳过）+ IPC `settings:update` 后经 hooks 通知重注册，无新增 channel（复用 `player:command`）。命令集扩展为 play-pause/next/previous/volume-up/volume-down/mute/like，renderer 统一分发（音量走 ref 避免闭包旧值；like 收藏当前曲，状态未知时先查后切换）。设置页新增「快捷键」分类：点击录制组合键（必须含 Ctrl/Alt/Win 修饰键，Esc 取消、Backspace 清除禁用）、同键冲突自动从旧动作移除、一键恢复默认。shortcuts 存入 AppSettings 并经 `sanitizeShortcuts` 落盘校验（输入优先、fallback 补位、同键唯一）；`shortcuts.d.mts` 提供类型。新增 6 项快捷键单测。
+- 无版权曲目：`trackFrom` 读取响应 `status` 字段（明确非 "1" = 不可用，字段缺失视为可用，避免误杀不带该字段的接口）；列表行 `is-unavailable` 灰显+删除线+播放按钮禁用（Ban 图标）；`play()` 拒绝无版权起点并自动把队列过滤为可播放曲目；全不可播时提示。新增 4 项断言。
+- 回归：typecheck、181 项离线单测全部通过；Windows 本机 `dist:win` 重建、重装、启动 4 进程正常。快捷键的真实全局触发（其他应用聚焦时按键）与录制 UI 交互未做自动化验收，以人工使用为准。
+
+## 桌面歌词悬浮窗（2026-10-21 第五轮）
+
+- 新增置顶悬浮桌面歌词：`src/main/desktop-lyrics.ts`（无边框透明 always-on-top 窗口，screen-saver 层级、全工作区可见、不占任务栏；锁定 = `setIgnoreMouseEvents(true, {forward:true})` 鼠标穿透）+ `src/renderer/lyrics.html` / `lyrics-main.ts` / `lyrics.css`（纯 DOM 无 React，深色胶囊背景 + 当前行大字 + 下一行/翻译预览，解锁态显示锁定/关闭按钮，整行 `-webkit-app-region: drag` 拖动，拖动落点防抖 800ms 持久化）。
+- 数据流：主窗口 renderer 在歌词行变化时 `ipcRenderer.send(desktop-lyrics:update)`（行索引去重，非每次 timeupdate 都发）→ 主进程 `sanitizeDesktopLyricsUpdate`（文本 500/标题 200 字符钳制，空推送丢弃）→ 转发歌词窗口；锁定状态经 `desktop-lyrics:state` 推送同步。歌词加载条件扩展为「抽屉/沉浸页/桌面歌词任一需要」。位置记忆 `desktopLyrics.position`（整数坐标、±32768 钳制）。
+- 安全：歌词窗口独立最小 preload（`src/preload/lyrics.ts`，仅订阅渲染 + 锁定/关闭，无凭据无音乐无设置面）；**sandbox preload 不允许 require 相对路径 chunk**，因此歌词 preload 不共享模块、channel 名字面量内联（与 channels.ts 人工同步）；`ipcMain.on` 监听器全部幂等注册（removeAllListeners 后再 on），防窗口重建叠加。设置页「播放」分类新增桌面歌词开关 + 锁定开关。
+- 构建：electron-vite renderer/preload 改多入口（`out/renderer/lyrics.html` + `out/preload/lyrics.cjs`），产物无共享 chunk。
+- 回归：typecheck、189 项离线单测（新增 4 项 payload/settings 断言）、`test:electron` smoke、`test:electron-ui` 全部通过——**均为 Windows 本机首跑全绿**（本机补装 ffmpeg 后；宿主 `ELECTRON_RUN_AS_NODE` 需清除）。smoke/ui 的 preload API 键断言加入 `desktopLyrics`。歌词窗口的拖动/锁定穿透/多显示器行为以人工验收为准。
+
+## 下一首播放（2026-10-21 第六轮）
+
+- 曲目行新增「下一首播放」按钮（SkipForward 图标，无版权禁用）。纯逻辑 `planPlayNext`（`src/renderer/player.mjs`）：queue 物理顺序与 order 播放顺序同步更新——新歌插到当前曲后一行；已在队列的歌按 id 匹配移动到该槽（顺序/随机模式都成立）；移动后 cursor 重算仍指向正在播放的曲；连点多次时后点的排在更前（与主流播放器一致）；无播放时排到队首。播放历史清空（队列被用户主动重排，避免「上一首」回到错乱位置）。`App.playNext` 拒绝无版权曲并提示。
+- 回归：typecheck、192 项离线单测（新增 7 项 planPlayNext 断言，其中一项抓出并修复 order 槽位移动后插入点未按删除后坐标系重算的真实 bug）、`test:electron`、`test:electron-ui` 通过；Windows 本机重建重装启动正常。按钮交互以人工验收为准。
+
+## 桌面歌词外观设置与锁定按钮修复（2026-10-21 第七轮）
+
+- 修复「锁定按钮点了没反应」真实 bug：`lyrics-main.ts` 里 `setLockedClass(!locked)` 已把模块内 `locked` 改成新值，紧接着 `setLocked(!locked)` 又反转回旧值，本地乐观更新与实际推送互相抵消，主进程始终写回原状态。改为先算 `next` 再统一使用。用 playwright 实测确认：修复后点击可锁定（`click-to-lock WORKED`），锁死后第二次点击超时正是鼠标穿透的预期表现（解锁需回到设置页）。
+- 新增桌面歌词外观设置：`fontColor`（#rrggbb，五个预设色 + 取色器，HEX 白名单校验）与 `backgroundOpacity`（0–1 钳制，滑杆）。经 `desktop-lyrics:state` 通道在每次 apply 时推送，歌词窗口以 CSS 变量（`--lyrics-font-color` / `--lyrics-bg-opacity`）实时应用；解锁态背景在用户值上 +0.15 保证控制条可读。旧存储缺字段时由默认值补齐（新增断言）。
+- 回归：typecheck、194 项离线单测、`test:electron` smoke、`test:electron-ui` 通过；Windows 本机重建重装启动正常。
+
+## README fork 化（2026-10-22 第八轮）
+
+- 原 `README.md` 以 `git mv` 改名为 `README-Talongao.md`（保留完整原文与 git rename 历史，作为原项目文档）。
+- 新建 `README.md`：声明 fork 自 Talongao 的原项目，并注明本 fork 新增与修改内容**由 AI 编程助手（华为云 CodeArts）在本人主导下完成**（本人提需求与验收、AI 实现与回归）；原项目能力与完整文档指向 README-Talongao.md；按真实改动列出本 fork 六项差异（品牌与图标、无版权显示与队列过滤、自定义全局快捷键、桌面歌词悬浮窗及外观设置、下一首播放、Windows NSIS 本机验证），并保留非官方/AGPL-3.0/不绕过付费 DRM 的边界声明。纯文档变更，无代码改动，无新增测试。
+
+## 断流自动重试改为断点续播（2026-10-22 第九轮）
+
+- 用户报告「莫名其妙的重新播放了」。代码定位根因：audio `error`（华为 CDN 断流/网络波动）→ `failed` handler 自动重试 `playAt(cursor, 1)` 时**未携带断点进度**（`pendingSeek` 为 null）→ `playAt` 将进度归零 → 当前曲从头播放；用户无任何操作，只有一条一闪而过的消息，观感即「莫名其妙重新播放」。
+- 修复：`track-reconcile.mjs` 新增纯函数 `mediaFailureResumeAt(currentTime)`（有限且 >1s 才返回断点，否则 null；新增单测）；`failed` 重试改为 `playAt(cursor, retry, { resumeAt })`；`playAt` 开头统一 `pendingSeek.current = options.resumeAt ?? null`——顺带消除隐患：重试失败后残留的 `pendingSeek` 不再泄漏到用户手动点的下一首歌（`playAt` 成为唯一写点）。
+- 回归：typecheck、195 项离线单测、`test:electron` smoke 通过；Windows 本机重建重装启动正常。真实华为 CDN 下的断流续播效果需实际使用观察（自动化测试用合成音频无法复现 CDN 断流）。
+
 ## 测试边界
 
 已运行：`npm ci`、typecheck/build、134 项单测、`test:electron`、`test:electron-ui`、`test:electron-business`、`test:electron-favorites`、`test:login-callback`、`test:login-cancel`、`test:login-navigation`、发行内容检查。公开登录页回归没有扫码或令牌交换。
@@ -116,6 +152,7 @@
 - 真实账号完整收藏：新增 `npm run test:login-live -- --login --qr --full-library`，同一次本人授权核验总数、完整分页和滚动加载，只输出统计；默认不会运行。真实 MP3/FLAC 播放仍另验，不以该脚本冒充。
 - 最新 AppImage：`release/linux-x64/huawei-music-desktop-0.0.1-linux-x86_64-internal.AppImage`；`release/linux-x64/SHA256SUMS` 已生成。`npm run test:packaged -- <AppImage路径>` 已通过，未上传。
 - ~~Windows portable~~（已废弃）：2026-10-18 起不再产出单文件免安装版，改为 NSIS 安装包；历史验证记录保留但不再适用当前构建目标。
+- Windows 本机安装（2026-10-21，Windows 11 x64）：`npm run dist:win` 原生构建 NSIS（`release/win-x64/huawei-music-desktop-0.0.1-win-x64-setup-internal.exe`，未签名）→ `/S` 静默安装 per-user（`%LOCALAPPDATA%\Programs\huawei-music-desktop\`，注册表卸载项 + 开始菜单快捷方式就位，无桌面快捷方式，符合配置）→ 安装版启动 4 进程、主窗口标题正确。安装版为全新 userData（与开发版不共享会话，需重新扫码）。**安装版登录/播放/托盘/卸载保留 userData 未逐一验证**；CI runner 实跑仍未做。
 - ~~`npm run test:portable-data`~~（已随 portable 目标移除）：该测试验证的是「解压到临时目录后用户数据不丢」，安装包场景改为覆盖安装保留 userData，待 Windows 真机验收。
 - 视觉选择：`design-previews/2026-10-15-desktop/index.html` 的 A/B/C/D，未选前保持当前基础样式。
 - Linux 密钥服务、真实听播、托盘/物理媒体键/睡眠仍需环境证据；Windows/macOS 原生测试延后，不阻塞共享逻辑。
