@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import {
-  ChevronUp, Heart, Headphones, ListMusic, Minimize2, Music2, Pause, Play, SkipBack, SkipForward, Volume2, VolumeX, X,
+  Ban, ChevronUp, Heart, Headphones, ListMusic, Minimize2, Music2, Pause, Play, SkipBack, SkipForward, Volume2, VolumeX, X,
 } from 'lucide-react';
 import { activeLyricIndex } from '../lyrics.mjs';
 import type { LyricsDoc, Playlist, Track } from '../shared/types';
@@ -15,6 +15,7 @@ export type TrackActions = {
   playing: boolean;
   favoriteOf(trackId: string): boolean | undefined;
   play(tracks: Track[], index: number): void;
+  playNext(track: Track): void;
   toggleFavorite(track: Track, favorite: boolean): void;
   openAlbum(id: string): void;
   openArtist(id: string): void;
@@ -54,26 +55,28 @@ export function TrackTable({ tracks, actions, onLoadMore, hasMore, busy, loadMor
         const favorite = actions.favoriteOf(track.id);
         const current = actions.currentTrackId === track.id;
         const key = `${track.id}-${index}`;
+        const unavailable = !track.available;
         return <div
           key={key}
-          className={`track-row ${current ? 'is-current' : ''} ${selected === key ? 'is-selected' : ''}`}
+          className={`track-row ${current ? 'is-current' : ''} ${selected === key ? 'is-selected' : ''} ${unavailable ? 'is-unavailable' : ''}`}
           role="button"
           tabIndex={0}
-          aria-label={`${track.title}，${track.artists.map(artist => artist.name).join('、') || '未知艺人'}`}
+          aria-label={`${track.title}，${track.artists.map(artist => artist.name).join('、') || '未知艺人'}${unavailable ? '，无版权' : ''}`}
           onClick={() => setSelected(key)}
-          onDoubleClick={() => actions.play(tracks, index)}
+          onDoubleClick={() => { if (!unavailable) actions.play(tracks, index); }}
           onKeyDown={event => {
-            if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); actions.play(tracks, index); }
+            if (event.target === event.currentTarget && !unavailable && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); actions.play(tracks, index); }
           }}
         >
           <span className="track-index">
             <span className="num">{String(index + 1).padStart(2, '0')}</span>
             <button
               className="track-play"
-              aria-label={`播放 ${track.title}`}
-              onClick={event => { event.stopPropagation(); actions.play(tracks, index); }}
+              aria-label={unavailable ? `无版权：${track.title}` : `播放 ${track.title}`}
+              disabled={unavailable}
+              onClick={event => { event.stopPropagation(); if (!unavailable) actions.play(tracks, index); }}
             >
-              {current && actions.playing ? <Pause size={11} fill="currentColor" /> : <Play size={11} fill="currentColor" />}
+              {unavailable ? <Ban size={11} /> : current && actions.playing ? <Pause size={11} fill="currentColor" /> : <Play size={11} fill="currentColor" />}
             </button>
           </span>
           <TrackArt track={track} />
@@ -93,6 +96,15 @@ export function TrackTable({ tracks, actions, onLoadMore, hasMore, busy, loadMor
               : track.album?.title ?? '—'}
           </span>
           <span className="track-duration">{formatDuration(track.durationSeconds)}</span>
+          <button
+            className="play-next-toggle"
+            aria-label={`下一首播放 ${track.title}`}
+            title="下一首播放"
+            disabled={unavailable}
+            onClick={event => { event.stopPropagation(); if (!unavailable) actions.playNext(track); }}
+          >
+            <SkipForward size={14} fill="currentColor" />
+          </button>
           <button
             className={`favorite-toggle ${favorite ? 'on' : ''}`}
             aria-label={favorite === undefined ? `切换收藏 ${track.title}` : favorite ? `取消收藏 ${track.title}` : `收藏 ${track.title}`}

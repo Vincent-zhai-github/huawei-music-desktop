@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   canRetryMediaFailure,
   isLatestFavoritesRequest,
+  mediaFailureResumeAt,
   reconcileTrackIndexes,
   shouldRestartResolvingPlayback,
 } from '../src/renderer/track-reconcile.mjs';
@@ -52,4 +53,14 @@ test('media failure permits one same-quality retry and then stops', () => {
   assert.equal(canRetryMediaFailure(0), true);
   assert.equal(canRetryMediaFailure(1), false);
   assert.equal(canRetryMediaFailure(2), false);
+});
+
+test('a media failure resumes from the breakpoint, not from zero', () => {
+  assert.equal(mediaFailureResumeAt(137.4), 137.4);
+  assert.equal(mediaFailureResumeAt(2), 2);
+  // A failure in the first second needs no seek at all; junk positions never seek.
+  assert.equal(mediaFailureResumeAt(0), null);
+  assert.equal(mediaFailureResumeAt(0.8), null);
+  assert.equal(mediaFailureResumeAt(Number.NaN), null);
+  assert.equal(mediaFailureResumeAt(Infinity), null);
 });

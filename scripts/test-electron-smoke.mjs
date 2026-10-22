@@ -114,7 +114,7 @@ try {
     requireType: typeof require,
   }));
   assert.equal(boundary.desktopApi, true);
-  assert.deepEqual(boundary.apiKeys, ['app', 'auth', 'fonts', 'lyrics', 'music', 'onNotice', 'player', 'queue', 'settings', 'window']);
+  assert.deepEqual(boundary.apiKeys, ['app', 'auth', 'desktopLyrics', 'fonts', 'lyrics', 'music', 'onNotice', 'player', 'queue', 'settings', 'window']);
   assert.deepEqual(boundary.authKeys, ['cancelLogin', 'login', 'logout', 'onProgress', 'status']);
   assert.deepEqual(boundary.musicKeys, [
     'album', 'artist', 'createPlaylist', 'deletePlaylist', 'favoriteState', 'favorites', 'favoritesSummary', 'history', 'lyrics',

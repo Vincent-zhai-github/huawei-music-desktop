@@ -28,3 +28,9 @@ export function shouldRestartResolvingPlayback({
 export function canRetryMediaFailure(retryCount) {
   return retryCount < 1;
 }
+
+// Where a failed load should resume from: the audio element keeps its last position through an
+// error, but retrying a track that barely started does not need a seek at all.
+export function mediaFailureResumeAt(currentTime) {
+  return Number.isFinite(currentTime) && currentTime > 1 ? currentTime : null;
+}

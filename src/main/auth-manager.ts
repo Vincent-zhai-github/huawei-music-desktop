@@ -296,7 +296,7 @@ export class AuthManager {
   }
 }
 
-export function isAllowedSender(window: BrowserWindow, event: Electron.IpcMainInvokeEvent): boolean {
+export function isAllowedSender(window: BrowserWindow, event: Electron.IpcMainInvokeEvent | Electron.IpcMainEvent): boolean {
   return event.sender === window.webContents
     && event.senderFrame === window.webContents.mainFrame
     && isTrustedRendererUrl(event.senderFrame.url, pathToFileURL(join(__dirname, '../renderer/index.html')).href);

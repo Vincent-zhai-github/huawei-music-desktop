@@ -7,6 +7,8 @@ import type {
 } from '../shared/types';
 import { formatBytes } from '../shared/format.mjs';
 import { APP_DISPLAY_NAME } from '../shared/app-name.mjs';
+import { DEFAULT_SHORTCUTS, SHORTCUT_ACTIONS, SHORTCUT_ACTION_LABELS, describeAccelerator } from '../shared/shortcuts.mjs';
+import type { ShortcutAction, ShortcutsSettings } from '../shared/types';
 
 export type LibraryContext = TrackActions & {
   busy: boolean;
@@ -23,6 +25,62 @@ export type LibraryContext = TrackActions & {
   localHistory: Track[];
   favoriteChange: { trackId: string; favorite: boolean; revision: number } | null;
 };
+
+const KEY_ALIASES: Record<string, string> = {
+  ' ': 'Space', ArrowLeft: 'Left', ArrowRight: 'Right', ArrowUp: 'Up', ArrowDown: 'Down',
+  Enter: 'Enter', Tab: 'Tab', Backspace: 'Backspace', Delete: 'Delete', Insert: 'Insert',
+  Home: 'Home', End: 'End', PageUp: 'PageUp', PageDown: 'PageDown', '+': 'Plus', '-': 'Minus',
+};
+
+function mainKeyOf(event: KeyboardEvent): string | null {
+  if (/^[a-z]$/i.test(event.key)) return event.key.toUpperCase();
+  if (/^[0-9]$/.test(event.key)) return event.key;
+  if (/^F([1-9]|1[0-9]|2[0-4])$/i.test(event.key)) return event.key;
+  return KEY_ALIASES[event.key] ?? null;
+}
+
+/** Records one accelerator: click, press a modifier combo, Esc cancels, Backspace clears. */
+function KeyCapture({ accelerator, onPick }: { accelerator: string; onPick(value: string): void }) {
+  const [recording, setRecording] = useState(false);
+  const [hint, setHint] = useState('');
+  const pickRef = useRef(onPick);
+  pickRef.current = onPick;
+  useEffect(() => {
+    if (!recording) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.key === 'Escape') { setRecording(false); setHint(''); return; }
+      if (['Control', 'Shift', 'Alt', 'Meta'].includes(event.key)) return;
+      if (!event.ctrlKey && !event.altKey && !event.metaKey && (event.key === 'Backspace' || event.key === 'Delete')) {
+        setRecording(false); setHint('');
+        pickRef.current('');
+        return;
+      }
+      const main = mainKeyOf(event);
+      if (!main) { setHint('这个按键不支持，请换一个组合。'); return; }
+      if (!event.ctrlKey && !event.altKey && !event.metaKey) { setHint('需要 Ctrl、Alt 或 Win 修饰键，避免影响其他软件打字。'); return; }
+      const parts = [event.ctrlKey ? 'Control' : '', event.altKey ? 'Alt' : '', event.metaKey ? 'Super' : '', event.shiftKey ? 'Shift' : '']
+        .filter(Boolean);
+      setRecording(false); setHint('');
+      pickRef.current([...parts, main].join('+'));
+    };
+    window.addEventListener('keydown', onKeyDown, true);
+    return () => window.removeEventListener('keydown', onKeyDown, true);
+  }, [recording]);
+  return <span className="key-capture-wrap">
+    <button
+      type="button"
+      className={`key-capture ${recording ? 'recording' : ''} ${accelerator ? 'bound' : ''}`}
+      aria-pressed={recording}
+      title="点击后按下组合键；Esc 取消，Backspace 清除键位"
+      onClick={() => { setHint(''); setRecording(previous => !previous); }}
+    >
+      {recording ? '按下组合键…' : describeAccelerator(accelerator)}
+    </button>
+    {hint && <small className="key-capture-hint" role="status">{hint}</small>}
+  </span>;
+}
 
 const PAGE = 50;
 
@@ -328,7 +386,7 @@ export function HistoryPage({ ctx }: { ctx: LibraryContext }) {
 
 export function SettingsPage({ ctx }: { ctx: LibraryContext }) {
   const settings = ctx.settings;
-  const [tab, setTab] = useState<'playback' | 'appearance' | 'about'>('playback');
+  const [tab, setTab] = useState<'playback' | 'shortcuts' | 'appearance' | 'about'>('playback');
   const appearance = settings?.appearance;
   // Optimistic local copy: dragging a slider must repaint immediately instead of waiting for the
   // IPC round-trip, otherwise fast keyboard repeats read a stale value and drop steps.
@@ -381,8 +439,24 @@ export function SettingsPage({ ctx }: { ctx: LibraryContext }) {
     void ctx.updateSettings({ appearance: next }).then(ok => { if (!ok) setDraft(undefined); });
   }
 
+  function updateShortcut(action: ShortcutAction, value: string) {
+    const current: ShortcutsSettings = settings?.shortcuts ?? { ...DEFAULT_SHORTCUTS };
+    const next: ShortcutsSettings = { ...current, [action]: value };
+    if (value) {
+      // One accelerator drives one action: stealing it from another action disables that one.
+      for (const other of SHORTCUT_ACTIONS) {
+        if (other !== action && next[other] === value) {
+          next[other] = '';
+          ctx.notice(`该组合键已从「${SHORTCUT_ACTION_LABELS[other]}」移除。`);
+        }
+      }
+    }
+    void ctx.updateSettings({ shortcuts: next });
+  }
+
   const tabs: { key: typeof tab; label: string }[] = [
     { key: 'playback', label: '播放' },
+    { key: 'shortcuts', label: '快捷键' },
     { key: 'appearance', label: '外观' },
     { key: 'about', label: '关于' },
   ];
@@ -436,6 +510,42 @@ export function SettingsPage({ ctx }: { ctx: LibraryContext }) {
             onChange={event => void ctx.updateSettings({ thirdPartyLyrics: event.target.checked })} />
         </label>
         <p className="hint">华为接口没有返回歌词时，用「歌名 + 艺人 + 时长」在酷狗音乐和 LRCLIB 严格匹配；匹配不准则保持无歌词，不会显示别的歌。只请求歌词文本，不涉及音源，也不会上传账号信息。</p>
+        <label>
+          <span>桌面歌词</span>
+          <input type="checkbox" aria-label="桌面歌词" checked={settings?.desktopLyrics?.enabled ?? false}
+            onChange={event => void ctx.updateSettings({ desktopLyrics: { ...(settings?.desktopLyrics ?? { locked: false, position: null, fontColor: '#ffffff', backgroundOpacity: 0.55 }), enabled: event.target.checked } })} />
+        </label>
+        <p className="hint">在屏幕上悬浮显示当前歌词行，置顶且不占任务栏。解锁时可以拖动位置、锁定（鼠标穿透）或关闭。</p>
+        {settings?.desktopLyrics?.enabled && <label>
+          <span>锁定桌面歌词（鼠标穿透）</span>
+          <input type="checkbox" aria-label="锁定桌面歌词" checked={settings.desktopLyrics.locked}
+            onChange={event => void ctx.updateSettings({ desktopLyrics: { ...settings.desktopLyrics, locked: event.target.checked } })} />
+        </label>}
+        {settings?.desktopLyrics?.enabled && <div className="appearance-field">
+          <div className="appearance-label">
+            <span>歌词颜色</span>
+            <span className="hint">当前行、下一行与歌名</span>
+          </div>
+          <div className="accent-swatches" role="group" aria-label="歌词颜色">
+            {['#ffffff', '#ffe680', '#a8d8ff', '#ffb3c8', '#b8f2c9'].map(color => <button key={color}
+              className={`accent-swatch ${(settings.desktopLyrics.fontColor ?? '#ffffff').toLowerCase() === color ? 'active' : ''}`}
+              style={{ background: color, color }}
+              aria-label={`歌词颜色 ${color}`}
+              aria-pressed={(settings.desktopLyrics.fontColor ?? '#ffffff').toLowerCase() === color}
+              onClick={() => void ctx.updateSettings({ desktopLyrics: { ...settings.desktopLyrics!, fontColor: color } })} />)}
+            <label className="accent-swatch accent-swatch-custom" style={{ background: settings.desktopLyrics.fontColor, color: settings.desktopLyrics.fontColor }} title="自定义歌词颜色">
+              <input type="color" aria-label="自定义歌词颜色" value={settings.desktopLyrics.fontColor}
+                onChange={event => void ctx.updateSettings({ desktopLyrics: { ...settings.desktopLyrics!, fontColor: event.target.value } })} />
+            </label>
+          </div>
+        </div>}
+        {settings?.desktopLyrics?.enabled && <label className="appearance-slider">
+          <span>歌词背景透明度<small>{Math.round((settings.desktopLyrics.backgroundOpacity ?? 0.55) * 100)}%</small></span>
+          <input type="range" aria-label="歌词背景透明度" min="0" max="1" step="0.05" value={settings.desktopLyrics.backgroundOpacity ?? 0.55}
+            style={{ '--pct': `${Math.round((settings.desktopLyrics.backgroundOpacity ?? 0.55) * 100)}%` } as CSSProperties}
+            onChange={event => void ctx.updateSettings({ desktopLyrics: { ...settings.desktopLyrics!, backgroundOpacity: Number(event.target.value) } })} />
+        </label>}
+        {settings?.desktopLyrics?.enabled && <p className="hint">歌词窗口以置顶悬浮方式显示，锁定后鼠标完全穿透；需要拖动、解锁或关闭时，先在这里取消锁定。</p>}
         <div className="cache-block">
           <div className="cache-text">
             <span>歌词缓存</span>
@@ -451,6 +561,19 @@ export function SettingsPage({ ctx }: { ctx: LibraryContext }) {
           </div>
         </div>
         <p className="hint">歌词按曲目缓存在本机 90 天，重启或切换账号后仍可用；本地导入的 LRC 优先级最高，可在歌词面板里移除。</p>
+      </div>}
+
+      {tab === 'shortcuts' && <div className="settings-form">
+        <p className="hint">全局快捷键在应用未聚焦时也能控制播放，默认键位参考常见音乐播放器的 Ctrl+Alt+ 组合。键盘上的媒体键（播放/暂停、前进、后退）始终有效，不受此处影响；点击键位重新录制，Backspace 清除后表示禁用。</p>
+        {SHORTCUT_ACTIONS.map(action => <div key={action} className="shortcut-row">
+          <span className="shortcut-label">{SHORTCUT_ACTION_LABELS[action]}</span>
+          <KeyCapture
+            accelerator={settings?.shortcuts?.[action] ?? DEFAULT_SHORTCUTS[action]}
+            onPick={value => updateShortcut(action, value)}
+          />
+        </div>)}
+        <button className="ghost" onClick={() => void ctx.updateSettings({ shortcuts: { ...DEFAULT_SHORTCUTS } })}>恢复默认快捷键</button>
+        <p className="hint">修改立即保存并生效；若某组合键已被其他软件占用，注册会静默跳过，可换一组再试。</p>
       </div>}
 
       {tab === 'appearance' && <div className="settings-form appearance-form">

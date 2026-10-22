@@ -7,6 +7,8 @@ test('settings keep only known enum values and clamp volume', () => {
     closeBehavior: 'tray', quality: 'lossless', volume: 1, repeatMode: 'one', shuffle: true, syncHistory: false,
     thirdPartyLyrics: true,
     appearance: DEFAULT_SETTINGS.appearance,
+    shortcuts: DEFAULT_SETTINGS.shortcuts,
+    desktopLyrics: DEFAULT_SETTINGS.desktopLyrics,
   });
   assert.deepEqual(sanitizeSettings({ closeBehavior: 'evil', quality: 'hires', volume: -3, repeatMode: 'loop', shuffle: 'yes', syncHistory: 'yes' }), {
     ...DEFAULT_SETTINGS, volume: 0,

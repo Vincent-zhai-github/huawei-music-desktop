@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import { channels } from '../shared/channels';
-import type { DesktopApi } from '../shared/types';
+import type { DesktopApi, DesktopLyricsUpdate, PlayerCommand } from '../shared/types';
 
 const api: DesktopApi = {
   auth: {
@@ -56,10 +56,13 @@ const api: DesktopApi = {
   app: { quit: () => ipcRenderer.invoke(channels.appQuit) },
   player: {
     onCommand: listener => {
-      const wrapped = (_event: Electron.IpcRendererEvent, command: 'play-pause' | 'next' | 'previous') => listener(command);
+      const wrapped = (_event: Electron.IpcRendererEvent, command: PlayerCommand) => listener(command);
       ipcRenderer.on(channels.playerCommand, wrapped);
       return () => ipcRenderer.removeListener(channels.playerCommand, wrapped);
     },
+  },
+  desktopLyrics: {
+    update: (input: DesktopLyricsUpdate) => { ipcRenderer.send(channels.desktopLyricsUpdate, input); },
   },
   onNotice: listener => {
     const wrapped = (_event: Electron.IpcRendererEvent, message: string) => listener(message);

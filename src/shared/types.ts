@@ -85,6 +85,40 @@ export type Quality = 'standard' | 'lossless';
 export type AccentName = 'red' | 'blue' | 'green' | 'amber' | 'violet' | 'custom';
 export type FontChoice = 'sans' | 'serif' | 'mono' | 'custom';
 
+// Actions the main process can request from the renderer: media keys, tray items and
+// user-configured global shortcuts all arrive through the same command channel.
+export type PlayerCommand = 'play-pause' | 'next' | 'previous' | 'volume-up' | 'volume-down' | 'mute' | 'like';
+// A shortcut action maps to an Electron accelerator string; '' disables the binding.
+export type ShortcutAction = PlayerCommand;
+export type ShortcutsSettings = Record<ShortcutAction, string>;
+
+// Desktop lyrics overlay window: enabled toggles the window, locked enables mouse pass-through,
+// position persists the last dragged spot (work-area coordinates). fontColor is a #rrggbb hex
+// and backgroundOpacity is the overlay capsule alpha (0 = invisible, 1 = solid).
+export type DesktopLyricsSettings = {
+  enabled: boolean;
+  locked: boolean;
+  position: { x: number; y: number } | null;
+  fontColor: string;
+  backgroundOpacity: number;
+};
+
+// Appearance pushed to the lyrics window on every settings apply.
+export type DesktopLyricsAppearance = {
+  locked: boolean;
+  fontColor: string;
+  backgroundOpacity: number;
+};
+
+// Payload the main window renderer pushes to the lyrics window on every line change.
+export type DesktopLyricsUpdate = {
+  title: string;
+  artist: string;
+  synced: boolean;
+  current: { text: string; translation: string | null } | null;
+  next: { text: string; translation: string | null } | null;
+};
+
 export type AppearanceSettings = {
   accent: AccentName;
   /** 0.55 – 1: how solid the floating glass panels are. */
@@ -112,6 +146,10 @@ export type AppSettings = {
   syncHistory: boolean;
   // Match lyrics from public third-party libraries when the provider returns none.
   thirdPartyLyrics: boolean;
+  // User-configured global shortcuts (Electron accelerator strings; '' disables an action).
+  shortcuts: ShortcutsSettings;
+  // Floating always-on-top desktop lyrics overlay.
+  desktopLyrics: DesktopLyricsSettings;
 };
 
 export type SavedQueue = {
@@ -170,7 +208,9 @@ export type DesktopApi = {
     clearCache(input?: { local?: boolean }): Promise<Result<LyricsCacheInfo>>;
   };
   app: { quit(): Promise<void> };
-  player: { onCommand(listener: (command: 'play-pause' | 'next' | 'previous') => void): () => void };
+  player: { onCommand(listener: (command: PlayerCommand) => void): () => void };
+  // One-way push channel for the desktop lyrics overlay (send, not invoke: high frequency).
+  desktopLyrics: { update(input: DesktopLyricsUpdate): void };
   onNotice(listener: (message: string) => void): () => void;
 };
 

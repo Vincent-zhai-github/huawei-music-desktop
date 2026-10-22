@@ -4,10 +4,12 @@ import { pathToFileURL } from 'node:url';
 import { registerIpc } from './ipc';
 import { AuthManager } from './auth-manager';
 import { createAuthManagerLifecycle } from './auth-manager-lifecycle.mjs';
+import { createDesktopLyricsModule } from './desktop-lyrics';
 import { applyNodeProxy, electronBypassRules, proxyConfigurationProblem, proxyRules, readProxySettings } from './proxy.mjs';
 import { shouldBlockMediaRequest } from '../safe-media-url.mjs';
 import { loadSettings } from './storage';
 import { TRAY_ICON_PNG_BASE64 } from './icons';
+import { DEFAULT_SHORTCUTS, shortcutCommands } from '../shared/shortcuts.mjs';
 import { APP_DISPLAY_NAME } from '../shared/app-name.mjs';
 import type { AppSettings } from '../shared/types';
 
@@ -16,6 +18,7 @@ let tray: Tray | null = null;
 let quitting = false;
 let closeBehavior: AppSettings['closeBehavior'] = 'quit';
 const rendererUrl = pathToFileURL(join(__dirname, '../renderer/index.html')).href;
+const desktopLyrics = createDesktopLyricsModule();
 const authManagerLifecycle = createAuthManagerLifecycle(async () => {
   const auth = new AuthManager(message => mainWindow?.webContents.send('auth:progress', message),
     () => session.defaultSession.clearStorageData({ storages: ['localstorage', 'indexdb', 'cachestorage'] }),
@@ -50,7 +53,12 @@ async function createWindow(): Promise<void> {
   try {
     const auth = await authManagerLifecycle.get();
     if (window.isDestroyed()) return;
-    registerIpc(window, auth, { onCloseBehavior: value => { closeBehavior = value; } });
+    registerIpc(window, auth, {
+      onCloseBehavior: value => { closeBehavior = value; },
+      onShortcuts: settings => applyGlobalShortcuts(settings),
+      onDesktopLyrics: settings => desktopLyrics.applySettings(settings),
+      desktopLyrics,
+    });
     window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
     window.webContents.session.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
     window.webContents.session.setPermissionCheckHandler(() => false);
@@ -66,7 +74,7 @@ async function createWindow(): Promise<void> {
   }
 }
 
-function sendPlayerCommand(command: 'play-pause' | 'next' | 'previous'): void {
+function sendPlayerCommand(command: import('../shared/types').PlayerCommand): void {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   mainWindow.webContents.send('player:command', command);
 }
@@ -113,14 +121,19 @@ function configureApplicationMenu(): void {
   ]));
 }
 
-function registerMediaKeys(): void {
-  const bindings: [Electron.Accelerator, 'play-pause' | 'next' | 'previous'][] = [
+// Physical media keys stay always-on; user-configured shortcuts come from settings and are
+// re-registered whenever settings change. A binding the OS rejects (already taken by another
+// app) is skipped instead of failing the whole set.
+function applyGlobalShortcuts(settings?: AppSettings): void {
+  globalShortcut.unregisterAll();
+  const bindings: [Electron.Accelerator, import('../shared/types').PlayerCommand][] = [
     ['MediaPlayPause', 'play-pause'],
     ['MediaNextTrack', 'next'],
     ['MediaPreviousTrack', 'previous'],
+    ...shortcutCommands(settings?.shortcuts ?? DEFAULT_SHORTCUTS),
   ];
   for (const [accelerator, command] of bindings) {
-    try { globalShortcut.register(accelerator, () => sendPlayerCommand(command)); } catch { /* Unsupported on this platform. */ }
+    try { globalShortcut.register(accelerator, () => sendPlayerCommand(command)); } catch { /* Unsupported or taken on this platform. */ }
   }
 }
 
@@ -154,10 +167,13 @@ app.whenReady().then(() => {
   }
   const proxy = readProxySettings();
   applyNodeProxy(proxy);
-  const settingsReady = loadSettings().then(settings => { closeBehavior = settings.closeBehavior; });
+  const settingsReady = loadSettings().then(settings => {
+    closeBehavior = settings.closeBehavior;
+    applyGlobalShortcuts(settings);
+    desktopLyrics.applySettings(settings);
+  });
   configureApplicationMenu();
   createTray();
-  registerMediaKeys();
   session.defaultSession.webRequest.onBeforeRequest({ urls: ['<all_urls>'] }, (details, callback) => {
     callback({ cancel: shouldBlockMediaRequest(details.resourceType, details.url) });
   });
@@ -181,6 +197,7 @@ app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(
 app.on('before-quit', () => { quitting = true; });
 app.on('will-quit', () => {
   globalShortcut.unregisterAll();
+  desktopLyrics.destroy();
   tray?.destroy();
   tray = null;
 });

@@ -69,3 +69,47 @@ export function autosaveDelay(nowMs, lastSaveMs, settleMs = 1500, intervalMs = 5
   if (elapsed >= intervalMs) return 0;
   return Math.min(settleMs, intervalMs - elapsed);
 }
+
+// "Play next": put a track right after the current one. Queue rows keep physical order (the
+// queue panel reads it) while `order` decides what actually plays next; both are updated
+// consistently and the returned cursor keeps pointing at the still-playing track.
+// Outcomes: 'inserted' (new row), 'moved' (requeued row), 'current' (already playing),
+// 'queued' (no track playing: it lands at the head, ready to start), null (unusable input).
+export function planPlayNext(queue, order, cursor, track) {
+  if (!Array.isArray(queue) || !Array.isArray(order) || !track || typeof track.id !== 'string') return null;
+  const activeIndex = Number.isInteger(cursor) && cursor >= 0 && cursor < order.length ? order[cursor] : -1;
+  if (activeIndex >= 0 && queue[activeIndex]?.id === track.id) return { queue, order, cursor, outcome: 'current' };
+  // The physical insert slot sits right after the current row; with nothing playing it is the head.
+  const at = activeIndex + 1;
+  const existing = queue.findIndex(item => item.id === track.id);
+  if (existing === -1) {
+    const nextQueue = [...queue];
+    nextQueue.splice(at, 0, track);
+    // Every queue row at or after the slot shifts by one; the new row joins the order right
+    // after the cursor (or at position 0 when nothing is playing, so it becomes the next up).
+    const nextOrder = order.map(value => (value >= at ? value + 1 : value));
+    nextOrder.splice(cursor + 1, 0, at);
+    return { queue: nextQueue, order: nextOrder, cursor, outcome: cursor < 0 ? 'queued' : 'inserted' };
+  }
+  // Requeue an existing row: move it physically to the slot and pull its order slot to cursor+1.
+  const target = existing < at ? at - 1 : at;
+  const nextQueue = [...queue];
+  nextQueue.splice(existing, 1);
+  nextQueue.splice(target, 0, track);
+  // Map every old queue index to its new position (a bijection, so order stays a permutation).
+  const remap = index => {
+    if (index === existing) return target;
+    if (index < existing) return index < target ? index : index + 1;
+    return index - 1 < target ? index - 1 : index;
+  };
+  const nextOrder = order.map(remap);
+  const activeRemapped = remap(activeIndex);
+  const position = nextOrder.indexOf(target);
+  nextOrder.splice(position, 1);
+  // After removing that slot the active row may have shifted left, so recompute the cursor
+  // before inserting; otherwise the pick would land one slot too late.
+  const insertAtOrder = activeIndex < 0 ? 0 : nextOrder.indexOf(activeRemapped) + 1;
+  nextOrder.splice(insertAtOrder, 0, target);
+  const nextCursor = activeIndex < 0 ? -1 : nextOrder.indexOf(activeRemapped);
+  return { queue: nextQueue, order: nextOrder, cursor: nextCursor, outcome: 'moved' };
+}

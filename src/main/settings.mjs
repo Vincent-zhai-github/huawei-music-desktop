@@ -17,9 +17,20 @@ export const DEFAULT_SETTINGS = Object.freeze({
     customAccent: '#c8202e',
     customFont: '',
   }),
+  shortcuts: Object.freeze({
+    'play-pause': 'Control+Alt+P',
+    next: 'Control+Alt+Right',
+    previous: 'Control+Alt+Left',
+    'volume-up': 'Control+Alt+Up',
+    'volume-down': 'Control+Alt+Down',
+    mute: 'Control+Alt+M',
+    like: 'Control+Alt+L',
+  }),
+  desktopLyrics: Object.freeze({ enabled: false, locked: false, position: null, fontColor: '#ffffff', backgroundOpacity: 0.55 }),
 });
 
 import { isSafeResourceUrl } from '../safe-media-url.mjs';
+import { sanitizeShortcuts } from '../shared/shortcuts.mjs';
 const CLOSE_BEHAVIORS = new Set(['quit', 'tray']);
 const QUALITIES = new Set(['standard', 'lossless']);
 const REPEAT_MODES = new Set(['off', 'all', 'one']);
@@ -74,7 +85,31 @@ export function sanitizeSettings(input, fallback = DEFAULT_SETTINGS) {
   if (raw.appearance && typeof raw.appearance === 'object') {
     next.appearance = sanitizeAppearance(raw.appearance, base.appearance);
   }
+  if (raw.shortcuts !== undefined) {
+    next.shortcuts = sanitizeShortcuts(raw.shortcuts, base.shortcuts);
+  }
+  if (raw.desktopLyrics !== undefined) {
+    next.desktopLyrics = sanitizeDesktopLyrics(raw.desktopLyrics, base.desktopLyrics);
+  }
   return next;
+}
+
+/** @returns {import('../shared/types').DesktopLyricsSettings} */
+export function sanitizeDesktopLyrics(input, fallback = DEFAULT_SETTINGS.desktopLyrics) {
+  // Defaults first: settings stored before a field existed must still yield a complete object.
+  const base = { ...DEFAULT_SETTINGS.desktopLyrics, ...(fallback ?? {}) };
+  if (!input || typeof input !== 'object') return base;
+  const raw = /** @type {Record<string, unknown>} */ (input);
+  const position = raw.position && typeof raw.position === 'object' && Number.isInteger(raw.position.x)
+    && Number.isInteger(raw.position.y) && Math.abs(raw.position.x) <= 32768 && Math.abs(raw.position.y) <= 32768
+    ? { x: raw.position.x, y: raw.position.y } : null;
+  return {
+    enabled: typeof raw.enabled === 'boolean' ? raw.enabled : base.enabled,
+    locked: typeof raw.locked === 'boolean' ? raw.locked : base.locked,
+    position,
+    fontColor: typeof raw.fontColor === 'string' && HEX_COLOR.test(raw.fontColor) ? raw.fontColor.toLowerCase() : base.fontColor,
+    backgroundOpacity: clampNumber(raw.backgroundOpacity, 0, 1, base.backgroundOpacity),
+  };
 }
 
 const MAX_QUEUE_TRACKS = 10000;

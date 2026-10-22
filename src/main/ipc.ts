@@ -6,12 +6,18 @@ import { listSystemFonts } from './system-fonts';
 import { clearLyricsCache, lyricsCacheInfo, readLyricsFile, removeLocalLyrics, writeLocalLyrics } from './lyrics-cache';
 import { parseLyrics } from '../lyrics.mjs';
 import { fail, ok } from '../shared/result';
+import type { DesktopLyricsModule } from './desktop-lyrics';
 import type { LyricsDoc, SavedQueue } from '../shared/types';
 
 export function registerIpc(
   window: BrowserWindow,
   auth: AuthManager,
-  hooks: { onCloseBehavior?: (value: 'quit' | 'tray') => void } = {},
+  hooks: {
+    onCloseBehavior?: (value: 'quit' | 'tray') => void;
+    onShortcuts?: (settings: import('../shared/types').AppSettings) => void;
+    onDesktopLyrics?: (settings: import('../shared/types').AppSettings) => void;
+    desktopLyrics?: DesktopLyricsModule;
+  } = {},
 ): void {
   const guard = (event: Electron.IpcMainInvokeEvent) => {
     if (!isAllowedSender(window, event)) throw new Error('IPC 来源不受信任');
@@ -150,7 +156,17 @@ export function registerIpc(
   ipcMain.handle(channels.settingsGet, async event => { guard(event); return ok(await loadSettings()); });
   ipcMain.handle(channels.settingsUpdate, async (event, input: unknown) => {
     guard(event);
-    return ok(await updateSettings(input));
+    const next = await updateSettings(input);
+    hooks.onShortcuts?.(next);
+    hooks.onDesktopLyrics?.(next);
+    return ok(next);
+  });
+  // One-way listeners must be idempotent: registerIpc runs again whenever the window is
+  // recreated (macOS activate), and stacked listeners would double-forward every payload.
+  ipcMain.removeAllListeners(channels.desktopLyricsUpdate);
+  ipcMain.on(channels.desktopLyricsUpdate, (event, payload) => {
+    if (!isAllowedSender(window, event)) return;
+    hooks.desktopLyrics?.forwardUpdate(payload);
   });
   ipcMain.handle(channels.fontsList, async event => { guard(event); return ok({ families: await listSystemFonts() }); });
   ipcMain.handle(channels.lyricsCacheInfo, async event => { guard(event); return ok(await lyricsCacheInfo()); });

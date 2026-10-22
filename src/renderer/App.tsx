@@ -10,12 +10,13 @@ import {
 import { FavoritesPage } from './favorites-page';
 import { APP_BRAND_LABEL } from '../shared/app-name.mjs';
 import {
-  autosaveDelay, buildShuffleOrder, historyReportDecision, onEndedAction, popPlayHistory, pushPlayHistory, stepCursor,
+  autosaveDelay, buildShuffleOrder, historyReportDecision, onEndedAction, planPlayNext, popPlayHistory, pushPlayHistory, stepCursor,
 } from './player.mjs';
+import { activeLyricIndex } from '../lyrics.mjs';
 import { fontStackFor, tintFromHex } from './theme.mjs';
-import { canRetryMediaFailure, reconcileTrackIndexes } from './track-reconcile.mjs';
+import { canRetryMediaFailure, mediaFailureResumeAt, reconcileTrackIndexes } from './track-reconcile.mjs';
 import type {
-  AccentName, AppSettings, AuthStatus, AppearanceSettings, FontChoice, LyricsDoc, Playback, Playlist, Result, SavedQueue, Track,
+  AccentName, AppSettings, AuthStatus, AppearanceSettings, FontChoice, LyricsDoc, Playback, PlayerCommand, Playlist, Result, SavedQueue, Track,
 } from '../shared/types';
 
 type View =
@@ -122,12 +123,17 @@ export function App() {
   const [accountVersion, setAccountVersion] = useState(0);
   const [favoriteChange, setFavoriteChange] = useState<LibraryContext['favoriteChange']>(null);
   const favoritePending = useRef(new Set<string>());
-  const playCommand = useRef({ toggle: () => {}, next: () => {}, previous: () => {} });
+  const playCommand = useRef<{ [K in PlayerCommand]: () => void }>({
+    'play-pause': () => {}, next: () => {}, previous: () => {}, 'volume-up': () => {},
+    'volume-down': () => {}, mute: () => {}, like: () => {},
+  });
   const [localHistory, setLocalHistory] = useState<Track[]>([]);
   const [volume, setVolume] = useState(0.85);
   const [quality, setQuality] = useState<'standard' | 'lossless'>('standard');
   const [repeatMode, setRepeatMode] = useState<AppSettings['repeatMode']>('off');
   const [shuffle, setShuffle] = useState(false);
+  const desktopLyricsRef = useRef(false);
+  const [desktopLyricsEnabled, setDesktopLyricsEnabled] = useState(false);
 
   const audio = useRef<HTMLAudioElement | null>(null);
   const playbackGeneration = useRef(0);
@@ -156,7 +162,7 @@ export function App() {
   const positionTimer = useRef<number | undefined>(undefined);
   const lastSaveAt = useRef(Date.now());
   const lastStructure = useRef<{ queue: Track[]; cursor: number }>({ queue: [], cursor: -1 });
-  const playAtRef = useRef<(nextCursor: number, retryCount?: number) => Promise<void>>(async () => undefined);
+  const playAtRef = useRef<(nextCursor: number, retryCount?: number, options?: { fromHistory?: boolean; resumeAt?: number | null }) => Promise<void>>(async () => undefined);
 
   const currentTrack = cursor >= 0 && cursor < order.current.length ? queue[order.current[cursor]] : undefined;
 
@@ -173,9 +179,7 @@ export function App() {
     const unsubscribeProgress = window.desktop.auth.onProgress(setMessage);
     const unsubscribeNotice = window.desktop.onNotice(setMessage);
     const unsubscribeCommand = window.desktop.player.onCommand(command => {
-      if (command === 'play-pause') playCommand.current.toggle();
-      else if (command === 'next') playCommand.current.next();
-      else playCommand.current.previous();
+      playCommand.current[command]();
     });
     void (async () => {
       const [authResult, settingsResult, queueResult] = await Promise.all([
@@ -246,12 +250,15 @@ export function App() {
     const paused = () => { if (isCurrentSource()) { setBuffering(false); setPlaying(false); } };
     const failed = () => {
       if (!isCurrentSource()) return;
+      const resumeAt = mediaFailureResumeAt(element.currentTime);
       activeAudioSource.current = '';
       setDuration(0); setBuffering(false); setPlaying(false); setActualQuality('unknown');
       if (canRetryMediaFailure(mediaRetryCount.current)) {
         const retryCount = mediaRetryCount.current + 1;
-        setMessage('音频资源加载失败，正在重新获取一次…');
-        void playAtRef.current(cursorRef.current, retryCount);
+        setMessage('音频资源加载失败，正在从断点重新获取一次…');
+        // Resume from the failure point instead of restarting the track: an unnoticed stream
+        // hiccup must never look like the song "mysteriously started over".
+        void playAtRef.current(cursorRef.current, retryCount, { resumeAt });
       } else setMessage('音频重试失败，请检查网络后手动重试。');
     };
     const ended = () => {
@@ -332,9 +339,9 @@ export function App() {
     } catch { /* Position state is best effort. */ }
   }, [position, duration]);
 
-  // Lyrics load once per track while either surface (drawer or full stage) is visible.
+  // Lyrics load once per track while any surface (drawer, stage or desktop overlay) needs them.
   useEffect(() => {
-    if (!lyricsOpen && !stageOpen) return;
+    if (!lyricsOpen && !stageOpen && !desktopLyricsEnabled) return;
     const trackId = currentTrack?.id;
     if (!trackId) { setLyrics(null); return; }
     setLyricOffset(readLyricOffset(trackId));
@@ -364,7 +371,28 @@ export function App() {
       setLyrics(null); setLyricsLoading(false);
     });
     return () => { cancelled = true; };
-  }, [lyricsOpen, stageOpen, currentTrack?.id, lyricRevision]);
+  }, [lyricsOpen, stageOpen, desktopLyricsEnabled, currentTrack?.id, lyricRevision]);
+
+  // Push the current lyric line to the desktop overlay; the key dedupes so we only send on
+  // line changes (position ticks re-run this effect but exit immediately).
+  const lastSentLyricKey = useRef('');
+  useEffect(() => {
+    if (!desktopLyricsEnabled) { lastSentLyricKey.current = ''; return; }
+    const lines = lyrics?.lines ?? [];
+    const index = lyrics?.synced ? activeLyricIndex(lines, (position + lyricOffset) * 1000) : -1;
+    const key = `${currentTrack?.id ?? ''}|${index}|${lyricRevision}`;
+    if (key === lastSentLyricKey.current) return;
+    lastSentLyricKey.current = key;
+    const lineAt = (at: number): { text: string; translation: string | null } | null =>
+      at >= 0 && at < lines.length ? { text: lines[at].text, translation: lines[at].translation ?? null } : null;
+    window.desktop.desktopLyrics.update({
+      title: currentTrack?.title ?? '',
+      artist: currentTrack?.artists.map(artist => artist.name).join(' / ') ?? '',
+      synced: lyrics?.synced === true,
+      current: index >= 0 ? lineAt(index) : null,
+      next: lines.length ? lineAt(index >= 0 ? index + 1 : 0) : null,
+    });
+  }, [desktopLyricsEnabled, position, lyrics, currentTrack, lyricOffset, lyricRevision]);
 
   async function importLocalLyrics() {
     const trackId = currentTrack?.id;
@@ -399,6 +427,8 @@ export function App() {
     repeatRef.current = next.repeatMode;
     setShuffle(next.shuffle);
     syncHistoryRef.current = next.syncHistory;
+    desktopLyricsRef.current = next.desktopLyrics.enabled;
+    setDesktopLyricsEnabled(next.desktopLyrics.enabled);
   }
 
   function identityOrder(count: number): number[] { return Array.from({ length: count }, (_, index) => index); }
@@ -411,7 +441,7 @@ export function App() {
     });
   }
 
-  async function playAt(nextCursor: number, retryCount = 0, options: { fromHistory?: boolean } = {}) {
+  async function playAt(nextCursor: number, retryCount = 0, options: { fromHistory?: boolean; resumeAt?: number | null } = {}) {
     const track = queueRef.current[order.current[nextCursor]];
     if (!track || !audio.current) return;
     if (!options.fromHistory) {
@@ -420,6 +450,9 @@ export function App() {
         playHistory.current = pushPlayHistory(playHistory.current, previous);
       }
     }
+    // playAt is the single writer: a leftover pending seek from an abandoned retry must never
+    // leak into a track the user picks manually, while a retry passes its breakpoint here.
+    pendingSeek.current = options.resumeAt ?? null;
     listenSeconds.current = 0;
     lastListenAt.current = 0;
     historyReported.current = false;
@@ -480,16 +513,38 @@ export function App() {
   }
   reportHistoryRef.current = reportPlayback;
 
+  // "Play next": requeue one track directly after the current one without interrupting playback.
+  function playNext(track: Track) {
+    if (!track.available) { setMessage('该歌曲无版权，无法加入播放。'); return; }
+    const plan = planPlayNext(queueRef.current, order.current, cursorRef.current, track);
+    if (!plan) return;
+    if (plan.outcome === 'current') { setMessage('这首歌正在播放。'); return; }
+    queueRef.current = plan.queue;
+    order.current = plan.order;
+    cursorRef.current = plan.cursor;
+    playHistory.current = [];
+    setQueue(plan.queue);
+    setCursor(plan.cursor);
+    setMessage(plan.outcome === 'queued'
+      ? `已将「${track.title}」排在队列最前，开始播放后即播放它。`
+      : `已将「${track.title}」设为下一首播放。`);
+  }
+
   function play(tracks: Track[], index: number) {
     if (!tracks.length) return;
+    const target = tracks[index];
+    if (target && !target.available) { setMessage('该歌曲无版权，无法播放。'); return; }
+    const playable = tracks.filter(t => t.available);
+    if (!playable.length) { setMessage('没有可播放的歌曲（全部无版权）。'); return; }
+    const newIndex = target ? playable.indexOf(target) : 0;
     pendingSeek.current = null;
     playHistory.current = [];
-    queueRef.current = tracks;
-    const nextOrder = shuffle ? buildShuffleOrder(tracks.length, index) : identityOrder(tracks.length);
+    queueRef.current = playable;
+    const nextOrder = shuffle ? buildShuffleOrder(playable.length, newIndex) : identityOrder(playable.length);
     order.current = nextOrder;
-    const nextCursor = nextOrder.indexOf(index);
+    const nextCursor = nextOrder.indexOf(newIndex);
     cursorRef.current = nextCursor < 0 ? 0 : nextCursor;
-    setQueue(tracks);
+    setQueue(playable);
     setCursor(cursorRef.current);
     void playAt(cursorRef.current);
   }
@@ -520,7 +575,18 @@ export function App() {
     void playAt(step.cursor);
   }
 
-  playCommand.current = { toggle: togglePlayback, next: goNext, previous: goPrevious };
+  playCommand.current = {
+    'play-pause': togglePlayback, next: goNext, previous: goPrevious,
+    'volume-up': () => changeVolume(Math.min(1, Math.round((volumeRef.current + 0.1) * 10) / 10)),
+    'volume-down': () => changeVolume(Math.max(0, Math.round((volumeRef.current - 0.1) * 10) / 10)),
+    mute: toggleMute,
+    like: () => {
+      const track = currentTrack;
+      if (!track) { setMessage('当前没有播放中的歌曲。'); return; }
+      const favorite = favoriteOf(track.id);
+      void toggleFavorite(track, favorite === undefined ? true : !favorite);
+    },
+  };
 
   function previewSeek(value: number) { seeking.current = true; seekTarget.current = value; setPosition(value); }
   function commitSeek() {
@@ -699,6 +765,7 @@ export function App() {
     playing,
     favoriteOf,
     play,
+    playNext,
     toggleFavorite,
     openAlbum: albumId => setView({ name: 'album', albumId }),
     openArtist: artistId => setView({ name: 'artist', artistId }),

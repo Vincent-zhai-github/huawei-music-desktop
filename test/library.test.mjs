@@ -24,6 +24,11 @@ test('track normalization keeps arrays, falls back to a single name and drops un
   assert.equal(trackFrom({ contentName: '缺少 ID' }), null);
   assert.equal(trackFrom({ contentID: '3' }), null);
   assert.deepEqual(trackFrom({ contentID: '4', contentName: '未知时长', duration: 'n/a' }).durationSeconds, undefined);
+  // An explicit non-"1" status marks an unlicensed/delisted song; a missing field keeps it playable.
+  assert.equal(trackFrom({ contentID: '5', contentName: '下架', status: '0' }).available, false);
+  assert.equal(trackFrom({ contentID: '6', contentName: '无状态字段', status: 2 }).available, false);
+  assert.equal(trackFrom({ contentID: '7', contentName: '无状态字段' }).available, true);
+  assert.equal(trackFrom({ contentID: '8', contentName: '可用', status: '1' }).available, true);
 });
 
 test('contentType splits songs from playlist types without losing unknown kinds', () => {

@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'" />
+    <title>桌面歌词</title>
+    <link rel="stylesheet" href="/lyrics.css" />
+  </head>
+  <body>
+    <div id="lyrics" class="lyrics-overlay locked">
+      <div class="lyrics-bar" id="lyrics-bar">
+        <span class="lyrics-track" id="lyrics-track">桌面歌词</span>
+        <span class="lyrics-controls">
+          <button id="lyrics-lock" title="锁定：鼠标穿透，不再挡住下面的窗口">🔒</button>
+          <button id="lyrics-close" title="关闭桌面歌词">✕</button>
+        </span>
+      </div>
+      <p class="lyrics-current" id="lyrics-current">打开桌面歌词后，这里会跟随播放显示歌词</p>
+      <p class="lyrics-next" id="lyrics-next"></p>
+    </div>
+    <script type="module" src="/lyrics-main.ts"></script>
+  </body>
+</html>

@@ -33,6 +33,12 @@ export const channels = {
   appQuit: 'app:quit',
   appNotice: 'app:notice',
   playerCommand: 'player:command',
+  desktopLyricsUpdate: 'desktop-lyrics:update',
+  desktopLyricsRender: 'desktop-lyrics:render',
+  desktopLyricsState: 'desktop-lyrics:state',
+  desktopLyricsSetLocked: 'desktop-lyrics:set-locked',
+  desktopLyricsRequestClose: 'desktop-lyrics:request-close',
+  desktopLyricsSavePosition: 'desktop-lyrics:save-position',
 } as const;
 
 export type Channel = (typeof channels)[keyof typeof channels];

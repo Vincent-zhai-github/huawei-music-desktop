@@ -40,7 +40,9 @@ export function trackFrom(value) {
     album: albumId && albumTitle ? { id: albumId, title: albumTitle } : undefined,
     coverUrl: coverFrom(value),
     durationSeconds: numeric(value?.duration),
-    available: true,
+    // The API marks unlicensed/delisted songs with a non-"1" status; some responses omit the
+    // field entirely, so only an explicit non-"1" value marks a track unavailable.
+    available: value?.status === undefined || value?.status === null ? true : String(value.status) === '1',
   };
 }
 
