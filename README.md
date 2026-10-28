@@ -10,7 +10,7 @@
 
 ## 本 fork 新增与修改的内容
 
-以下改动由 AI 编程助手编写实现（本人提需求、定方案、做本机验收），均已通过 typecheck、194 项离线单测（`npm test`）、`test:electron` smoke 与 `test:electron-ui` 回归（Windows 本机）；逐轮证据见 [docs/IMPLEMENTATION_STATUS.md](docs/IMPLEMENTATION_STATUS.md)。
+以下改动由 AI 编程助手编写实现（本人提需求、定方案、做本机验收），均已通过 typecheck、205 项离线单测（`npm test`）、`test:electron` smoke、`test:electron-ui` 与 `test:electron-business` 回归（Windows 本机）；逐轮证据见 [docs/IMPLEMENTATION_STATUS.md](docs/IMPLEMENTATION_STATUS.md)，按提交对照的变更清单见 [docs/CHANGELOG.md](docs/CHANGELOG.md)。
 
 ### 1. 品牌与外观
 
@@ -48,6 +48,26 @@
 - Windows **NSIS 安装包**在 Windows 11 本机完成：原生构建 → 静默安装（per-user，自定义目录）→ 安装版启动（4 进程 + 主窗口）验证；注册表卸载项与开始菜单快捷方式就位。
 - `test:electron` smoke 与 `test:electron-ui` 在 Windows 本机跑通全绿（原项目仅 Linux 验证）。
 - 未签名构建；安装版登录/播放全流程与 CI Windows runner 实跑仍未验收，以 [docs/IMPLEMENTATION_STATUS.md](docs/IMPLEMENTATION_STATUS.md) 为准。
+
+### 7. 按曲音质档位切换（新增）
+
+- 播放坞音质按钮改为**弹出菜单**：标准 / HQ / 无损三档，当前档打勾；每首歌只显示接口返回的可用档位。
+- 切换档位**立即换流并保留播放进度**，无需重播当前曲。
+- 请求的档位对当前歌曲不可用时**自动回退到最接近的可用档**（优先向低找最高，否则向高找最低），并提示实际播放档位。
+- 设置 → 播放 → 默认音质；队列持久化保留每曲档位，重启恢复。
+- **超清（超高清音频 2.0）不提供**：实测超钻会员（最高等级）请求仍被服务端拒绝——该音质需要 HarmonyOS NEXT 设备与华为耳机 L2HC 全链路，属设备端处理流，桌面端无法使用；与会员等级无关。
+- 本机实测（超钻会员）：标准 / HQ / 无损三档播放均正常。
+
+### 8. 搜索页播放全部（新增）
+
+- 搜索结果支持一键「播放全部」；结果分页未加载完时按钮显示「播放已加载 N 首」，只播已加载曲目，不宣称覆盖全量结果。
+- 自动过滤无版权歌曲（与播放队列规则一致）。
+
+### 9. 会话过期感知（改进）
+
+- 华为音乐会话约 7 天过期。过期后收藏/歌单/播放等操作给出明确提示「音乐登录已过期，请重新扫码登录」，侧栏状态点亮橙显示过期状态（此前是笼统的「请求失败」提示，易误导）。
+- 过期时收藏与歌单自动回退**本地缓存**，页面不再空白；重新扫码后恢复在线数据。
+- 登录时开始把 OAuth refresh_token 加密留存于本机：经实测公开客户端（无应用密钥）的刷新接口已被服务端拒绝，自动续期暂不可行；留存凭据用于后续真实验证，不宣称已支持免扫码续期。
 
 ---
 
