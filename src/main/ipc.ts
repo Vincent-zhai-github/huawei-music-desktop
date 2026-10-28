@@ -6,8 +6,9 @@ import { listSystemFonts } from './system-fonts';
 import { clearLyricsCache, lyricsCacheInfo, readLyricsFile, removeLocalLyrics, writeLocalLyrics } from './lyrics-cache';
 import { parseLyrics } from '../lyrics.mjs';
 import { fail, ok } from '../shared/result';
+import { QUALITY_ORDER } from '../shared/qualities.mjs';
 import type { DesktopLyricsModule } from './desktop-lyrics';
-import type { LyricsDoc, SavedQueue } from '../shared/types';
+import type { LyricsDoc, Quality, SavedQueue } from '../shared/types';
 
 export function registerIpc(
   window: BrowserWindow,
@@ -146,9 +147,9 @@ export function registerIpc(
     if (!playlistId) throw new Error('歌单 ID 无效');
     return auth.deletePlaylist(playlistId);
   });
-  ipcMain.handle(channels.musicResolvePlayback, async (event, input: { trackId: string; quality: 'standard' | 'lossless' }) => {
+  ipcMain.handle(channels.musicResolvePlayback, async (event, input: { trackId: string; quality: Quality }) => {
     guard(event);
-    if (!input || !idOf(input.trackId) || !['standard', 'lossless'].includes(input.quality)) {
+    if (!input || !idOf(input.trackId) || !QUALITY_ORDER.includes(input.quality)) {
       throw new Error('播放参数无效');
     }
     return auth.getPlayback(input.trackId, input.quality);

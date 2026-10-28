@@ -9,6 +9,11 @@ import type { AppSettings, SavedQueue } from '../shared/types';
 export type StoredMusicSession = {
   version: 1;
   music: { token: string; snsUserID?: string; expireTime?: string };
+  // Refresh credential from the offline OAuth grant, kept next to the music session so a
+  // future renewal path can mint fresh sessions without re-scanning. Never logged; the
+  // public-client refresh grant itself was rejected by the provider (see
+  // docs/token-lifetimes-and-renewal.md), so today this is only collected, not used.
+  oauth?: { refreshToken: string };
 };
 
 export function persistenceMode(): 'secure' | 'memory-only' {

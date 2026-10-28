@@ -1,4 +1,5 @@
 import { MUSIC_ENDPOINT, musicHeaders, ProviderError } from './auth.mjs';
+import { qualityCodeOf } from './shared/qualities.mjs';
 import { fetch as httpFetch } from 'undici';
 
 const asId = (value, label) => {
@@ -117,7 +118,7 @@ export class MusicClient {
   }
   resolvePlayback(trackId, quality='standard') {
     if (typeof trackId !== 'string' || !trackId.trim()) throw new Error('播放需要真实歌曲 ID');
-    const qualityType = quality === 'lossless' ? '3' : quality === 'standard' ? '1' : null;
+    const qualityType = qualityCodeOf(quality);
     if (!qualityType) throw new Error('不支持的音质');
     return this.#request('/music-play-service/v3/service/file/bycontentcode', {
       contentCode: trackId, contentType: '1', qualityType,

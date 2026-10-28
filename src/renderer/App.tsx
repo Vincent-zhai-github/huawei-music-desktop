@@ -9,6 +9,8 @@ import {
 } from './pages';
 import { FavoritesPage } from './favorites-page';
 import { APP_BRAND_LABEL } from '../shared/app-name.mjs';
+import { QUALITY_LABELS, fallbackQuality } from '../shared/qualities.mjs';
+import { musicSessionExpired } from '../shared/session-expiry.mjs';
 import {
   autosaveDelay, buildShuffleOrder, historyReportDecision, onEndedAction, planPlayNext, popPlayHistory, pushPlayHistory, stepCursor,
 } from './player.mjs';
@@ -16,7 +18,7 @@ import { activeLyricIndex } from '../lyrics.mjs';
 import { fontStackFor, tintFromHex } from './theme.mjs';
 import { canRetryMediaFailure, mediaFailureResumeAt, reconcileTrackIndexes } from './track-reconcile.mjs';
 import type {
-  AccentName, AppSettings, AuthStatus, AppearanceSettings, FontChoice, LyricsDoc, Playback, PlayerCommand, Playlist, Result, SavedQueue, Track,
+  AccentName, AppSettings, AuthStatus, AppearanceSettings, FontChoice, LyricsDoc, Playback, PlayerCommand, Playlist, Quality, Result, SavedQueue, Track, TrackQuality,
 } from '../shared/types';
 
 type View =
@@ -109,7 +111,7 @@ export function App() {
   const [buffering, setBuffering] = useState(false);
   const [position, setPosition] = useState(0);
   const [duration, setDuration] = useState(0);
-  const [actualQuality, setActualQuality] = useState<'standard' | 'lossless' | 'unknown'>('unknown');
+  const [actualQuality, setActualQuality] = useState<Quality | 'unknown'>('unknown');
   const [lyrics, setLyrics] = useState<LyricsDoc | null>(null);
   const [lyricsOpen, setLyricsOpen] = useState(false);
   const [lyricsLoading, setLyricsLoading] = useState(false);
@@ -129,11 +131,15 @@ export function App() {
   });
   const [localHistory, setLocalHistory] = useState<Track[]>([]);
   const [volume, setVolume] = useState(0.85);
-  const [quality, setQuality] = useState<'standard' | 'lossless'>('standard');
+  const [quality, setQuality] = useState<Quality>('standard');
+  const [qualityMenuOpen, setQualityMenuOpen] = useState(false);
   const [repeatMode, setRepeatMode] = useState<AppSettings['repeatMode']>('off');
   const [shuffle, setShuffle] = useState(false);
   const desktopLyricsRef = useRef(false);
   const [desktopLyricsEnabled, setDesktopLyricsEnabled] = useState(false);
+  // expireTime is an unverified-timezone hint, so this only flips once even the latest reading
+  // has passed — used for the sidebar label, while real failures stay decided by the provider.
+  const sessionExpired = status?.authenticated === true && musicSessionExpired(status.musicExpireTime);
 
   const audio = useRef<HTMLAudioElement | null>(null);
   const playbackGeneration = useRef(0);
@@ -147,7 +153,7 @@ export function App() {
   const cursorRef = useRef(-1);
   const queueRef = useRef<Track[]>([]);
   const repeatRef = useRef<AppSettings['repeatMode']>('off');
-  const qualityRef = useRef<'standard' | 'lossless'>('standard');
+  const qualityRef = useRef<Quality>('standard');
   const volumeRef = useRef(0.85);
   const syncHistoryRef = useRef(true);
   const listenSeconds = useRef(0);
@@ -467,8 +473,14 @@ export function App() {
     setCursor(nextCursor);
     setMessage(`正在获取「${track.title}」的播放资源…`);
     let result: Result<Playback>;
+    // Serve the requested tier when the track offers it; otherwise fall back to the highest
+    // tier at or below it. The setting itself stays untouched — this is per-request only.
+    const available = (track.qualities ?? []).map(item => item.quality);
+    const requested = qualityRef.current;
+    const effective = available.length ? (fallbackQuality(requested, available) ?? requested) : requested;
+    const substituted = available.length > 0 && effective !== requested;
     try {
-      result = await window.desktop.music.resolvePlayback({ trackId: track.id, quality: qualityRef.current });
+      result = await window.desktop.music.resolvePlayback({ trackId: track.id, quality: effective });
     } catch {
       if (generation === playbackGeneration.current) { isResolvingTrack.current = false; setBuffering(false); setMessage('获取播放资源失败，请重试。'); }
       return;
@@ -484,7 +496,8 @@ export function App() {
     try {
       await audio.current.play();
       if (generation !== playbackGeneration.current) return;
-      setMessage(`已开始 ${track.title} · ${result.data.actualQuality === 'lossless' ? '无损' : result.data.actualQuality === 'standard' ? '标准' : '服务端未确认音质'}`);
+      const served = result.data.actualQuality === 'unknown' ? '服务端未确认音质' : QUALITY_LABELS[result.data.actualQuality];
+      setMessage(`已开始 ${track.title} · ${served}${substituted ? `（该歌曲未提供${QUALITY_LABELS[requested]}，已用${QUALITY_LABELS[effective]}）` : ''}`);
     } catch {
       if (generation !== playbackGeneration.current) return;
       activeAudioSource.current = '';
@@ -655,11 +668,22 @@ export function App() {
     void updateSettings({ repeatMode: next });
     setMessage(next === 'one' ? '单曲循环。' : next === 'all' ? '列表循环。' : '顺序播放。');
   }
-  function toggleQuality() {
-    const next = quality === 'standard' ? 'lossless' : 'standard';
+  // Quality switch: persists the default tier immediately and, when something is already
+  // playing, re-resolves the stream at the new tier while keeping the current position
+  // (playAt's pendingSeek path). The per-request fallback still applies if the track
+  // does not offer the chosen tier.
+  function changeQuality(next: Quality) {
     setQuality(next); qualityRef.current = next;
+    setQualityMenuOpen(false);
     void updateSettings({ quality: next });
-    setMessage(next === 'lossless' ? '已切换为无损（下次取链生效）。' : '已切换为标准音质。');
+    const track = currentTrack;
+    if (!track || !audio.current) { setMessage(`默认音质已设为${QUALITY_LABELS[next]}。`); return; }
+    const resumeAt = positionRef.current > 1 ? positionRef.current : null;
+    setMessage(`已选择${QUALITY_LABELS[next]}，正在以当前进度重新取流…`);
+    void playAtRef.current(cursorRef.current, 0, { resumeAt });
+  }
+  function toggleQualityMenu() {
+    setQualityMenuOpen(open => !open);
   }
   const lastAudibleVolume = useRef(0.85);
   function changeVolume(value: number) {
@@ -827,8 +851,8 @@ export function App() {
         </button>;
       })}
       <div className="sidebar-foot">
-        <div className={`status-dot ${status?.authenticated ? '' : 'off'}`} />
-        <span>{status?.authenticated ? '音乐会话已连接' : '未登录'}</span>
+        <div className={`status-dot ${status?.authenticated ? (sessionExpired ? 'expired' : '') : 'off'}`} />
+        <span>{status?.authenticated ? (sessionExpired ? '音乐登录已过期' : '音乐会话已连接') : '未登录'}</span>
       </div>
     </aside>
     <main className="main-content">
@@ -912,7 +936,9 @@ export function App() {
       onSeekCommit={commitSeek}
       onVolume={changeVolume}
       onToggleMute={toggleMute}
-      onToggleQuality={toggleQuality}
+      onToggleQualityMenu={toggleQualityMenu}
+      onChangeQuality={changeQuality}
+      qualityMenuOpen={qualityMenuOpen}
       onToggleRepeat={toggleRepeat}
       onToggleShuffle={toggleShuffle}
       onToggleLyrics={() => setLyricsOpen(value => { if (!value) setQueueOpen(false); return !value; })}

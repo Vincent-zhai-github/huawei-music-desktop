@@ -19,6 +19,14 @@ test('settings keep only known enum values and clamp volume', () => {
   assert.deepEqual(sanitizeSettings({ volume: Number.NaN }).volume, DEFAULT_SETTINGS.volume);
 });
 
+test('quality accepts every exposed tier and falls back on unknown ones', () => {
+  for (const quality of ['standard', 'hq', 'lossless', 'ultra']) {
+    assert.equal(sanitizeSettings({ quality }).quality, quality);
+  }
+  assert.equal(sanitizeSettings({ quality: 'sq' }).quality, DEFAULT_SETTINGS.quality);
+  assert.equal(sanitizeSettings({ quality: '7' }).quality, DEFAULT_SETTINGS.quality);
+});
+
 test('queue sanitation drops malformed rows and clamps the index', () => {
   const queue = sanitizeQueue({ tracks: [
     { id: 'a', title: 'A', artists: [{ name: '甲' }, { name: '' }, { id: 'x' }], album: { id: 'al', title: 'AL' }, durationSeconds: 12 },
@@ -30,6 +38,29 @@ test('queue sanitation drops malformed rows and clamps the index', () => {
   assert.deepEqual(queue.tracks[0].album, { id: 'al', title: 'AL' });
   assert.equal(queue.index, 0);
   assert.equal(queue.positionSeconds, 12.5);
+});
+
+test('queue sanitation keeps known tiers on tracks and drops unknown ones', () => {
+  const queue = sanitizeQueue({ tracks: [{
+    id: 'a', title: 'A', artists: [{ name: '甲' }],
+    qualities: [
+      { quality: 'ultra', format: 'FLAC' },
+      { quality: 'standard', format: 'MP3', fileSize: 4332025 },
+      { quality: 'hq', format: 'MP3' },
+      { quality: 'lossless', format: 'FLAC', fileSize: -5 },
+      { quality: '15', format: 'MKV' },
+      'bad-row',
+    ],
+  }], index: 0 });
+  assert.deepEqual(queue.tracks[0].qualities, [
+    { quality: 'standard', format: 'MP3', fileSize: 4332025 },
+    { quality: 'hq', format: 'MP3', fileSize: undefined },
+    { quality: 'lossless', format: 'FLAC', fileSize: undefined },
+    { quality: 'ultra', format: 'FLAC', fileSize: undefined },
+  ]);
+  assert.deepEqual(sanitizeQueue({ tracks: [{ id: 'b', title: 'B', artists: [], qualities: 'nope' }], index: 0 }).tracks[0], {
+    id: 'b', title: 'B', artists: [], album: undefined, coverUrl: undefined, durationSeconds: undefined, available: true,
+  });
 });
 
 test('queue sanitation rejects empty or non object payloads', () => {

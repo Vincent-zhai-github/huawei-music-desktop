@@ -18,6 +18,9 @@ export type Track = {
   coverUrl?: string;
   durationSeconds?: number;
   available: boolean;
+  // Available playback tiers for this track, sorted standard → ultra. Absent when
+  // the source response carried no parsable completeFileInfos.
+  qualities?: TrackQuality[];
 };
 
 export type FavoritesPage = {
@@ -74,14 +77,20 @@ export type ArtistDetail = {
 
 export type Playback = {
   url: string;
-  actualQuality: 'standard' | 'lossless' | 'unknown';
+  actualQuality: Quality | 'unknown';
   contentType?: string;
   durationSeconds?: number;
   expiresAt?: string;
 };
 
 export type RepeatMode = 'off' | 'all' | 'one';
-export type Quality = 'standard' | 'lossless';
+// Tiers the service can serve for a track; codes map through shared/qualities.mjs.
+// 'ultra' (qualityType 7) passes the catalog but live take-link requests were rejected with
+// resultCode 142411 on a verified membership account (likely a higher-tier entitlement), so no
+// UI entry exposes it yet; the type stays for the fallback logic and future verification.
+export type Quality = 'standard' | 'hq' | 'lossless' | 'ultra';
+// Per-track tier metadata parsed from the search/detail completeFileInfos payload.
+export type TrackQuality = { quality: Quality; format?: string; fileSize?: number };
 export type AccentName = 'red' | 'blue' | 'green' | 'amber' | 'violet' | 'custom';
 export type FontChoice = 'sans' | 'serif' | 'mono' | 'custom';
 
@@ -182,7 +191,7 @@ export type DesktopApi = {
       album?: string;
       durationSeconds?: number;
     }): Promise<Result<LyricsDoc>>;
-    resolvePlayback(input: { trackId: string; quality: 'standard' | 'lossless' }): Promise<Result<Playback>>;
+    resolvePlayback(input: { trackId: string; quality: Quality }): Promise<Result<Playback>>;
     reportPlayback(input: { trackId: string; title: string; listenedSeconds: number; songDurationSeconds?: number }): Promise<Result<void>>;
     favoriteState(input: { trackId: string }): Promise<Result<{ favorite: boolean }>>;
     setFavorite(input: { trackId: string; favorite: boolean }): Promise<Result<{ favorite: boolean }>>;

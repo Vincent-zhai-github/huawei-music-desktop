@@ -31,6 +31,44 @@ test('track normalization keeps arrays, falls back to a single name and drops un
   assert.equal(trackFrom({ contentID: '8', contentName: '可用', status: '1' }).available, true);
 });
 
+test('trackFrom parses completeFileInfos tiers from the JSON contentExInfo string', () => {
+  const ex = {
+    completeFileInfos: {
+      '1': { format: 'MP3', mediaFileType: 'MP3', fileSize: '4332025', quality: '1' },
+      '2': { format: 'MP3', mediaFileType: 'MP3', fileSize: '10807676', quality: '2' },
+      '3': { format: 'FLAC', mediaFileType: 'FLAC', fileSize: '31529813', quality: '3' },
+      '7': { format: 'FLAC', mediaFileType: 'FLAC', quality: '7' },
+      '15': { format: 'MKV', mediaFileType: 'MKV', fileSize: '37253510', quality: '15' },
+      '17': { format: 'MKV', mediaFileType: 'MKV', fileSize: '37253510', quality: '17' },
+    },
+  };
+  const track = trackFrom({ contentID: '1092974', contentName: '晴天', contentExInfo: JSON.stringify(ex) });
+  // Ultra (7) and the MKV tiers pass the catalog but stay unexposed until playback is verified.
+  assert.deepEqual(track.qualities, [
+    { quality: 'standard', format: 'MP3', fileSize: 4332025 },
+    { quality: 'hq', format: 'MP3', fileSize: 10807676 },
+    { quality: 'lossless', format: 'FLAC', fileSize: 31529813 },
+  ]);
+});
+
+test('trackFrom accepts array-shaped completeFileInfos and tolerates broken payloads', () => {
+  const arrayShaped = trackFrom({
+    contentID: 'a', contentName: '数组形态',
+    contentExInfo: JSON.stringify({ completeFileInfos: [{ quality: '3', format: 'FLAC' }, { quality: '1', format: 'MP3' }] }),
+  });
+  assert.deepEqual(arrayShaped.qualities, [
+    { quality: 'standard', format: 'MP3', fileSize: undefined },
+    { quality: 'lossless', format: 'FLAC', fileSize: undefined },
+  ]);
+  // Broken JSON, missing payload, or only unsupported tiers all yield no qualities key.
+  assert.equal('qualities' in trackFrom({ contentID: 'b', contentName: '坏 JSON', contentExInfo: '{oops' }), false);
+  assert.equal('qualities' in trackFrom({ contentID: 'c', contentName: '缺失' }), false);
+  assert.equal('qualities' in trackFrom({
+    contentID: 'd', contentName: '仅 MKV',
+    contentExInfo: JSON.stringify({ completeFileInfos: { '15': { format: 'MKV', quality: '15' } } }),
+  }), false);
+});
+
 test('contentType splits songs from playlist types without losing unknown kinds', () => {
   const entries = [
     { contentID: 'song', contentName: '歌曲', contentType: '1' },

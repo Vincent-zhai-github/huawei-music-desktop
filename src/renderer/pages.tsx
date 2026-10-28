@@ -278,6 +278,9 @@ export function SearchPage({ ctx }: { ctx: LibraryContext }) {
       <input aria-label="搜索歌曲" value={query} maxLength={80} placeholder="搜索歌曲名称或艺人" onChange={event => setQuery(event.target.value)} />
       <button className="primary" type="submit" disabled={ctx.busy || !query.trim()}>搜索</button>
     </form>
+    {tracks.length ? <div className="detail-actions">
+      <button className="primary" onClick={() => ctx.play(tracks, 0)}><Play size={13} fill="currentColor" />{hasMore ? `播放已加载 ${tracks.length} 首` : '播放全部'}</button>
+    </div> : null}
     <TrackTable tracks={tracks} actions={ctx} onLoadMore={() => void run(nextStart.current, true)} hasMore={hasMore} busy={ctx.busy}
       loadMoreLabel="加载更多结果" emptyText={searched ? '没有找到匹配的歌曲。' : '输入关键词后开始搜索。'} />
   </section>;
@@ -480,8 +483,9 @@ export function SettingsPage({ ctx }: { ctx: LibraryContext }) {
         <label>
           <span>默认音质</span>
           <select aria-label="默认音质" value={settings?.quality ?? 'standard'} onChange={event => void ctx.updateSettings({ quality: event.target.value as AppSettings['quality'] })}>
-            <option value="standard">标准</option>
-            <option value="lossless">无损</option>
+            <option value="standard">标准（128k）</option>
+            <option value="hq">HQ 高品质（320k）</option>
+            <option value="lossless">SQ 无损</option>
           </select>
         </label>
         <label>

@@ -30,6 +30,11 @@ async function loadSession(directory, safeStorage, fs) {
     const encrypted = await fs.readFile(join(directory, 'session.enc'));
     const data = JSON.parse(safeStorage.decryptString(encrypted));
     if (data.version !== 1 || typeof data.music?.token !== 'string' || !data.music.token) return null;
+    // The optional oauth block keeps only a well-formed refresh token; anything else is dropped
+    // so callers can trust the shape without a second validation pass.
+    const refreshToken = data?.oauth?.refreshToken;
+    if (typeof refreshToken === 'string' && refreshToken) data.oauth = { refreshToken };
+    else delete data.oauth;
     return data;
   } catch { return null; }
 }

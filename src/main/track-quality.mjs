@@ -1,15 +1,10 @@
-function declaredCodec(value) {
-  if (typeof value !== 'string') return undefined;
-  const normalized = value.trim().toLowerCase();
-  if (/\bflac\b/.test(normalized)) return 'flac';
-  if (/\bmp3\b/.test(normalized) || normalized === 'audio/mpeg') return 'mp3';
-  return undefined;
-}
+import { QUALITY_CODES, QUALITY_ORDER } from '../shared/qualities.mjs';
 
-export function confirmedPlaybackQuality(playQuality, contentType) {
-  const quality = String(playQuality ?? '');
-  const codec = declaredCodec(contentType);
-  if (quality === '3' && codec === 'flac') return 'lossless';
-  if (quality === '1' && codec === 'mp3') return 'standard';
-  return 'unknown';
+// The playback response reports the served tier in playQuality (qualityType code). An earlier
+// revision cross-checked the `type` field as a MIME codec, but live samples return type values
+// like "1" (an enum, not a codec), so the code itself is the only reliable evidence. Anything
+// outside the supported tier codes is reported as unknown and never advertised in the UI.
+export function confirmedPlaybackQuality(playQuality) {
+  const code = playQuality === undefined || playQuality === null ? '' : String(playQuality);
+  return QUALITY_ORDER.find(quality => QUALITY_CODES[quality] === code) ?? 'unknown';
 }

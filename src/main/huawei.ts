@@ -18,7 +18,7 @@ import type {
   PlaylistList, Quality, SearchPage, Track,
 } from '../shared/types';
 
-type Session = { token: string; snsUserID?: string; expireTime?: string };
+type Session = { token: string; snsUserID?: string; expireTime?: string; oauth?: { refreshToken: string } };
 const id = (value: unknown) => typeof value === 'string' && value ? value : undefined;
 const number = (value: unknown) => {
   const parsed = Number(value);
@@ -145,8 +145,15 @@ export async function openLogin(options: { onProgress: (message: string) => void
     if (earlyCode === undefined) onProgress('请在官方页面完成扫码和授权。');
     const code = earlyCode ?? await callback;
     onProgress('授权成功，正在换取音乐会话…');
-    const tokens = await exchangeCode(code, attempt) as { access_token: string };
-    return await exchangeMusicSession(tokens.access_token) as Session;
+    const tokens = await exchangeCode(code, attempt) as { access_token: string; refresh_token?: string };
+    const music = await exchangeMusicSession(tokens.access_token) as Session;
+    // Keep the offline-grant refresh token for a future renewal path. The public-client refresh
+    // grant itself was rejected by the provider in earlier live testing (1101/20171, see
+    // docs/token-lifetimes-and-renewal.md), so this is persistence only — never used here.
+    if (typeof tokens.refresh_token === 'string' && tokens.refresh_token) {
+      music.oauth = { refreshToken: tokens.refresh_token };
+    }
+    return music;
   } finally {
     loginCallback?.reject(new Error('登录流程已结束'));
     if (timer) clearTimeout(timer);
@@ -345,6 +352,6 @@ export async function resolvePlayback(session: Session, trackId: string, quality
   const response = await clientFor(session).resolvePlayback(trackId, quality);
   const url = id(response?.fileURL);
   if (!url || !isSafeMediaUrl(url)) throw new Error('服务端未返回安全的音频地址');
-  const actual = confirmedPlaybackQuality(response?.playQuality ?? response?.qualityType, response?.type);
+  const actual = confirmedPlaybackQuality(response?.playQuality);
   return { url, actualQuality: actual, contentType: id(response?.type), durationSeconds: number(response?.songInfo?.duration) };
 }

@@ -15,9 +15,10 @@ import { thirdPartyLyrics } from './lyrics-fallback';
 import { readCachedLyrics, readLocalLyrics, writeCachedLyrics } from './lyrics-cache';
 import { isTrustedRendererUrl } from './renderer-origin.mjs';
 import { errorFrom, fail, ok } from '../shared/result';
+import { musicSessionExpired } from '../shared/session-expiry.mjs';
 import type {
-  AlbumDetail, ArtistDetail, AuthStatus, FavoritesPage, HistoryPage, LyricsDoc, Playback, Playlist,
-  PlaylistDetail, PlaylistList, Result, SearchPage,
+  AlbumDetail, AppError, ArtistDetail, AuthStatus, FavoritesPage, HistoryPage, LyricsDoc, Playback, Playlist,
+  PlaylistDetail, PlaylistList, Quality, Result, SearchPage,
 } from '../shared/types';
 
 // Playlists change far less often than they are viewed; a short in-process cache keeps page
@@ -26,6 +27,7 @@ export const PLAYLIST_CACHE_TTL_MS = 5 * 60_000;
 
 export class AuthManager {
   private session: StoredMusicSession['music'] | null = null;
+  private oauthRefreshToken: string | null = null;
   private persistence: 'secure' | 'memory-only' = persistenceMode();
   private loginPromise: Promise<StoredMusicSession['music']> | null = null;
   private readonly sessionEpoch = createSessionEpoch();
@@ -38,7 +40,9 @@ export class AuthManager {
     private readonly loginHost: () => Electron.BrowserWindow | null = () => null) {}
 
   async restore(): Promise<void> {
-    this.session = (await loadMusicSession())?.music ?? null;
+    const stored = await loadMusicSession();
+    this.session = stored?.music ?? null;
+    this.oauthRefreshToken = stored?.oauth?.refreshToken ?? null;
     this.persistence = persistenceMode();
   }
   canSaveQueue(): boolean { return !this.loginPromise && !this.sessionEpoch.isTransitioning(); }
@@ -66,12 +70,15 @@ export class AuthManager {
         await clearPersonalData();
         await this.clearRendererData();
         let persisted = false;
-        try { persisted = await saveMusicSession({ version: 1, music: candidate }); }
-        catch { persisted = false; }
+        try {
+          const oauth = session.oauth?.refreshToken ? { refreshToken: session.oauth.refreshToken } : undefined;
+          persisted = await saveMusicSession(oauth ? { version: 1, music: candidate, oauth } : { version: 1, music: candidate });
+        } catch { persisted = false; }
         const outcome = sessionSaveOutcome(!!previous, persisted);
         if (outcome === 'preserve') throw new Error('新会话无法安全保存，已保留现有登录状态。');
         this.persistence = outcome === 'memory-only' ? 'memory-only' : 'secure';
         this.session = candidate;
+        this.oauthRefreshToken = session.oauth?.refreshToken ?? null;
         this.writer = null;
         this.memory.clear();
         this.catalog?.invalidate(); this.catalog = null;
@@ -99,6 +106,7 @@ export class AuthManager {
       await this.clearRendererData();
       await clearMusicSession();
       this.session = null;
+      this.oauthRefreshToken = null;
       this.writer = null;
       this.memory.clear();
       this.catalog?.invalidate(); this.catalog = null;
@@ -130,8 +138,8 @@ export class AuthManager {
       if (!this.sessionEpoch.isCurrent(epoch)) return fail({ kind: 'auth', message: '账号状态已更改，请重新读取收藏。', retryable: true });
       return ok(page);
     } catch (error) {
-      const failure = errorFrom(error);
-      if (failure.kind === 'network' && this.sessionEpoch.isCurrent(epoch)) {
+      const failure = this.#expiredFailure(error) ?? errorFrom(error);
+      if ((failure.kind === 'network' || failure.code === 'session-expired') && this.sessionEpoch.isCurrent(epoch)) {
         const cached = await loadCachedLibraryPage(`favorites:${start}:${limit}`).catch(() => null);
         if (cached && this.sessionEpoch.isCurrent(epoch)) return ok(cached as FavoritesPage);
       }
@@ -258,7 +266,7 @@ export class AuthManager {
     if (this.loginPromise) return fail({ kind: 'unknown', message: '登录正在进行，请稍后再修改音乐库。', retryable: false });
     return this.#sessionRequest(run, '账号状态已更改，写操作结果未确认。');
   }
-  async getPlayback(trackId: string, quality: 'standard' | 'lossless'): Promise<Result<Playback>> {
+  async getPlayback(trackId: string, quality: Quality): Promise<Result<Playback>> {
     if (this.sessionEpoch.isTransitioning()) return fail({ kind: 'auth', message: '正在退出登录，请稍后重试。', retryable: true });
     if (!this.session) return fail({ kind: 'auth', message: '请先登录华为音乐。', retryable: false });
     const epoch = this.sessionEpoch.capture();
@@ -266,7 +274,7 @@ export class AuthManager {
       const playback = await resolvePlayback(this.session, trackId, quality);
       if (!this.sessionEpoch.isCurrent(epoch)) return fail({ kind: 'auth', message: '账号状态已更改，请重新请求播放资源。', retryable: true });
       return ok(playback);
-    } catch (error) { return fail(errorFrom(error)); }
+    } catch (error) { return fail(this.#expiredFailure(error) ?? errorFrom(error)); }
   }
   async #cachedRead<T>(key: string, read: () => Promise<T>): Promise<Result<T>> {
     const epoch = this.sessionEpoch.capture();
@@ -277,13 +285,22 @@ export class AuthManager {
       if (!this.sessionEpoch.isCurrent(epoch)) return fail({ kind: 'auth', message: '账号状态已更改，请刷新。', retryable: true });
       return result;
     }
-    if (result.error.kind === 'network') {
+    if (result.error.kind === 'network' || result.error.code === 'session-expired') {
       const cached = await loadCachedLibraryPage(key).catch(() => null);
       if (cached && this.sessionEpoch.isCurrent(epoch)) return ok(cached as T);
     }
     return result;
   }
   // Shared guard for session-scoped calls: no session means no request is issued.
+  // The provider rejects an expired music session with an opaque business code inside HTTP 200.
+  // Only the combination of a server-side rejection (ProviderError) and a passed expireTime
+  // reading may rewrite the failure as an explicit login expiry; everything else keeps the
+  // structural error so network problems never masquerade as an expired login.
+  #expiredFailure(error: unknown): AppError | null {
+    if (!(error instanceof Error) || error.name !== 'ProviderError') return null;
+    if (!musicSessionExpired(this.session?.expireTime)) return null;
+    return { kind: 'auth', message: '音乐登录已过期，请重新扫码登录。', retryable: false, code: 'session-expired' };
+  }
   async #sessionRequest<T>(run: () => Promise<T>, staleMessage: string): Promise<Result<T>> {
     if (this.sessionEpoch.isTransitioning()) return fail({ kind: 'auth', message: '正在退出登录，请稍后重试。', retryable: true });
     if (!this.session) return fail({ kind: 'auth', message: '请先登录华为音乐。', retryable: false });
@@ -292,7 +309,7 @@ export class AuthManager {
       const data = await run();
       if (!this.sessionEpoch.isCurrent(epoch)) return fail({ kind: 'auth', message: staleMessage, retryable: true });
       return ok(data);
-    } catch (error) { return fail(errorFrom(error)); }
+    } catch (error) { return fail(this.#expiredFailure(error) ?? errorFrom(error)); }
   }
 }
 

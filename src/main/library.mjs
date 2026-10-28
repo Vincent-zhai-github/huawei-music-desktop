@@ -1,5 +1,6 @@
 // Pure response normalizers shared by the main process. No network or Electron access.
 import { isSafeResourceUrl } from '../safe-media-url.mjs';
+import { QUALITY_CODES, QUALITY_ORDER } from '../shared/qualities.mjs';
 const text = value => (typeof value === 'string' && value.trim() ? value.trim() : undefined);
 const numeric = value => {
   if (value === null || value === undefined || value === '' || typeof value === 'boolean') return undefined;
@@ -27,13 +28,42 @@ function coverFrom(value) {
     .map(text).find(url => url && isSafeResourceUrl(url));
 }
 
+// Parse the per-track tier list from contentExInfo.completeFileInfos. The field arrives as a
+// JSON string; completeFileInfos itself is a key→object map keyed by qualityType, but older
+// research hinted at array shapes, so both are accepted. Quality "7" (ultra) passes the catalog
+// but live requests were rejected with resultCode 142411 on a verified membership account —
+// likely a higher-tier entitlement — so it stays unexposed like the MKV tiers (15/17).
+// Malformed payloads yield undefined — parsing must never drop the whole track.
+const EXPOSED_QUALITY_CODES = new Set(Object.values(QUALITY_CODES).slice(0, 3));
+export function qualitiesFrom(value) {
+  let ex = value?.contentExInfo;
+  if (typeof ex === 'string') {
+    try { ex = JSON.parse(ex); } catch { return undefined; }
+  }
+  if (!ex || typeof ex !== 'object') return undefined;
+  const raw = ex.completeFileInfos;
+  const entries = Array.isArray(raw)
+    ? raw.map(info => [String(info?.quality ?? ''), info])
+    : raw && typeof raw === 'object' ? Object.entries(raw) : [];
+  const qualities = [];
+  for (const [code, info] of entries) {
+    if (!EXPOSED_QUALITY_CODES.has(code)) continue;
+    const quality = QUALITY_ORDER.find(name => QUALITY_CODES[name] === code);
+    if (!quality || !info || typeof info !== 'object') continue;
+    qualities.push({ quality, format: text(info.format ?? info.mediaFileType), fileSize: numeric(info.fileSize) });
+  }
+  if (!qualities.length) return undefined;
+  qualities.sort((a, b) => QUALITY_ORDER.indexOf(a.quality) - QUALITY_ORDER.indexOf(b.quality));
+  return qualities;
+}
+
 export function trackFrom(value) {
   const id = text(value?.contentID ?? value?.contentId ?? value?.songCode);
   const title = text(value?.contentName ?? value?.songName);
   if (!id || !title) return null;
   const albumId = text(value?.albumID ?? value?.albumId ?? value?.albumNamePair?.id ?? value?.albumNamePair?.albumID);
   const albumTitle = text(value?.albumName ?? value?.albumNamePair?.name ?? value?.albumNamePair?.albumName);
-  return {
+  const track = {
     id,
     title,
     artists: artistsFrom(value),
@@ -44,6 +74,9 @@ export function trackFrom(value) {
     // field entirely, so only an explicit non-"1" value marks a track unavailable.
     available: value?.status === undefined || value?.status === null ? true : String(value.status) === '1',
   };
+  const qualities = qualitiesFrom(value);
+  if (qualities) track.qualities = qualities;
+  return track;
 }
 
 export function tracksFrom(items) {

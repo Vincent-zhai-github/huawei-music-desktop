@@ -1,6 +1,6 @@
 # 实现进度
 
-更新时间：2026-10-21。当前以 **Linux 真实 Electron 环境**完成共享 API、业务逻辑、页面和播放器验证；Windows/macOS 不阻塞开发，不使用 Wine 作为运行/验收依赖。不对外发布。2026-10-21 起在 Windows 11 本机完成 NSIS 构建、安装与启动验证（见 M6）。
+更新时间：2026-10-28。当前以 **Linux 真实 Electron 环境**完成共享 API、业务逻辑、页面和播放器验证；Windows/macOS 不阻塞开发，不使用 Wine 作为运行/验收依赖。2026-10-21 起在 Windows 11 本机完成 NSIS 构建、安装与启动验证（见 M6）；2026-10-28 起开发验收转到 Windows 11 本机进行。
 
 ## M0–M6
 
@@ -134,6 +134,23 @@
 - 用户报告「莫名其妙的重新播放了」。代码定位根因：audio `error`（华为 CDN 断流/网络波动）→ `failed` handler 自动重试 `playAt(cursor, 1)` 时**未携带断点进度**（`pendingSeek` 为 null）→ `playAt` 将进度归零 → 当前曲从头播放；用户无任何操作，只有一条一闪而过的消息，观感即「莫名其妙重新播放」。
 - 修复：`track-reconcile.mjs` 新增纯函数 `mediaFailureResumeAt(currentTime)`（有限且 >1s 才返回断点，否则 null；新增单测）；`failed` 重试改为 `playAt(cursor, retry, { resumeAt })`；`playAt` 开头统一 `pendingSeek.current = options.resumeAt ?? null`——顺带消除隐患：重试失败后残留的 `pendingSeek` 不再泄漏到用户手动点的下一首歌（`playAt` 成为唯一写点）。
 - 回归：typecheck、195 项离线单测、`test:electron` smoke 通过；Windows 本机重建重装启动正常。真实华为 CDN 下的断流续播效果需实际使用观察（自动化测试用合成音频无法复现 CDN 断流）。
+
+## 音质档位切换与搜索页播放全部（2026-10-28 第十轮）
+
+- 按歌曲可用音质切换档位：`src/shared/qualities.mjs` 定义 standard/HQ/lossless/ultra 四档与 1/2/3/7 的 qualityType 映射；`library.qualitiesFrom` 解析搜索/详情响应里的 `contentExInfo.completeFileInfos`（key→对象与数组两种形态都接受），`Track.qualities` 只暴露三档（见超清结论）。播放坞新增档位弹出菜单（当前档打勾；曲目无解析数据时兜底显示全档），切换档位**立即换流并保留播放进度**（复用 playAt 的 resumeAt/pendingSeek 机制）；请求档不可用时 `fallbackQuality` 先向低找最高、再向高找最低，只有更高档位的歌曲也能播放并提示实际档位。设置页默认音质下拉、队列持久化保留每曲档位。
+- playback 实际档确认改为以响应 `playQuality` 数字为准；此前 `confirmedPlaybackQuality` 用 `type` 字段交叉推断的假设被真实样本推翻（`type:"1"` 是枚举值不是 MIME）。`auditionTime` 在会员完整播放时同样出现，继续不作为试听依据。
+- 超清（qualityType 7）实测结论：超钻会员（最高等级）请求仍被服务端以 resultCode 142411 拒绝（HTTP 200）；结合官方说明，超高清音频 2.0 需要 HarmonyOS NEXT 设备与华为耳机 L2HC 全链路，属于设备端动态处理流（该档在 completeFileInfos 无 fileSize），桌面端架构性不可用。`EXPOSED_QUALITY_CODES` 因此只保留 1/2/3，设置页不出现 ultra 选项。**不把 inability 归因会员等级。**
+- 搜索页新增「播放全部」：有更多分页时按钮显示「播放已加载 N 首」，只播已加载且无版权过滤后的曲目，不宣称播全量结果。
+- 用户本机实测：标准/HQ/无损三档播放均正常。回归：typecheck、201 项离线单测（新增 qualities 4 项、completeFileInfos 解析、档位 sanitize、队列保留）、`test:electron`、`test:electron-ui`、`test:electron-business` 全部通过。
+
+## 会话过期感知与 OAuth refresh 凭据留存（2026-10-28 第十一轮）
+
+- 背景：音乐会话实测约 7 天失效（2026-10-14 记录 expireTime=20261021101354，10-28 实测过期）；无版权搜索等匿名接口不受影响。公开客户端（无 client_secret）的 refresh_token grant 此前已用真实令牌实测被拒（1101/20171，见 `docs/token-lifetimes-and-renewal.md`），本项目不注册自有应用、不引入后端，因此**本轮不做自动续期**，先完成凭据留存与过期感知，为 7 天后的真实验证铺路。
+- refresh_token 留存：`openLogin` 保留 offline 授权响应中的 `refresh_token`（仅持久化到 `session.enc` 的 `oauth.refreshToken`，登录流程不使用）；`session-store` 载入时把 oauth 块归一为可信形状，其余形状一律丢弃；logout/清数据随会话一并删除。
+- 过期判定：新增 `src/shared/session-expiry.mjs`——14 位 yyyyMMddHHmmss 字段按 UTC 与本地两种解释取较晚者作为「确定已过期」上界（时区从未实测，宁可晚提示不误报重扫），不可能日期（如 4 月 31 日）经重建 round-trip 校验判 null，不信任 Date.parse 的溢出行为。
+- 过期体验：音乐请求被服务端拒绝（ProviderError）且字面已过期时，错误文案统一改为「音乐登录已过期，请重新扫码登录。」（`code: session-expired`）；仅网络错误或字段未过期时保持原结构化错误，避免网络断连被误报为登录过期。收藏与歌单/专辑在此场景回退本地缓存（与既有网络失败回退同一机制）；侧栏状态点亮橙并显示「音乐登录已过期」，右上角原有「重新登录」按钮直接可用。
+- 7 天后计划：届时用留存的真实 refresh_token 走 `src/refresh-probe.mjs` 的 `verifyRefresh` 实测无 secret refresh grant；若仍被拒，自动续期的唯一候选是保留官方登录上下文的 CAS 静默重授权（`prompt=none`），该路线涉及 Cookie 持久化安全面，未评估不实施。
+- 回归：typecheck、205 项离线单测（新增 session-expiry 3 项、oauth 归一 1 项）、`test:electron`、`test:electron-ui`、`test:electron-business` 全部通过。
 
 ## 测试边界
 

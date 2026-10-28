@@ -36,6 +36,27 @@ test('production session store encrypts a minimal payload and restores it', asyn
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
+test('oauth refresh token round-trips and is normalized to the trusted shape', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'music-session-oauth-'));
+  const key = Buffer.from('test-only-encryption-key');
+  const safeStorage = {
+    isEncryptionAvailable: () => true,
+    getSelectedStorageBackend: () => 'gnome_libsecret',
+    encryptString: value => Buffer.concat([Buffer.from('cipher:'), Buffer.from(value).map((byte, index) => byte ^ key[index % key.length])]),
+    decryptString: value => Buffer.from(value.subarray(7).map((byte, index) => byte ^ key[index % key.length])).toString(),
+  };
+  try {
+    const stored = { version: 1, music: { token: 'TEST-ONLY' }, oauth: { refreshToken: 'TEST-RT', junk: 'drop-me' } };
+    await saveSession(directory, stored, safeStorage, fs);
+    assert.deepEqual(await loadSession(directory, safeStorage, fs),
+      { version: 1, music: { token: 'TEST-ONLY' }, oauth: { refreshToken: 'TEST-RT' } });
+    for (const oauth of ['x', {}, { refreshToken: 5 }, { refreshToken: '' }]) {
+      await saveSession(directory, { version: 1, music: { token: 'TEST-ONLY' }, oauth }, safeStorage, fs);
+      assert.deepEqual(await loadSession(directory, safeStorage, fs), { version: 1, music: { token: 'TEST-ONLY' } });
+    }
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
 test('unavailable or basic_text safe storage never writes a session file', async () => {
   for (const safeStorage of [
     { isEncryptionAvailable: () => false },

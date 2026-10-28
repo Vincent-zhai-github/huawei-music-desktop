@@ -3,7 +3,8 @@ import {
   Ban, ChevronUp, Heart, Headphones, ListMusic, Minimize2, Music2, Pause, Play, SkipBack, SkipForward, Volume2, VolumeX, X,
 } from 'lucide-react';
 import { activeLyricIndex } from '../lyrics.mjs';
-import type { LyricsDoc, Playlist, Track } from '../shared/types';
+import { QUALITY_LABELS, QUALITY_ORDER } from '../shared/qualities.mjs';
+import type { LyricsDoc, Playlist, Quality, Track } from '../shared/types';
 
 export function formatDuration(seconds?: number): string {
   if (seconds === undefined || !Number.isFinite(seconds)) return '—';
@@ -141,8 +142,9 @@ type PlayerBarProps = {
   position: number;
   duration: number;
   volume: number;
-  quality: 'standard' | 'lossless';
-  actualQuality: 'standard' | 'lossless' | 'unknown';
+  quality: Quality;
+  actualQuality: Quality | 'unknown';
+  qualityMenuOpen: boolean;
   repeatMode: 'off' | 'all' | 'one';
   shuffle: boolean;
   disabled: boolean;
@@ -153,7 +155,8 @@ type PlayerBarProps = {
   onSeekCommit(): void;
   onVolume(value: number): void;
   onToggleMute(): void;
-  onToggleQuality(): void;
+  onToggleQualityMenu(): void;
+  onChangeQuality(quality: Quality): void;
   onToggleRepeat(): void;
   onToggleShuffle(): void;
   onToggleLyrics(): void;
@@ -171,10 +174,22 @@ function percent(value: number, max: number): string {
   return `${Math.min(100, Math.max(0, (value / max) * 100))}%`;
 }
 
+// Menu entries for the quality picker: the track's own tiers when known, else all supported
+// tiers without format hints (old cached queues carry no qualities data).
+function qualityMenuOptions(track?: Track): { quality: Quality; format?: string }[] {
+  const fromTrack = (track?.qualities ?? [])
+    .map(item => ({ quality: item.quality, format: item.format }))
+    .sort((a, b) => QUALITY_ORDER.indexOf(a.quality) - QUALITY_ORDER.indexOf(b.quality));
+  if (fromTrack.length) return fromTrack;
+  return QUALITY_ORDER.map(quality => ({ quality }));
+}
+
 export function PlayerBar(props: PlayerBarProps) {
   const { track, playing, buffering, position, duration, volume } = props;
   const repeatLabel = props.repeatMode === 'one' ? '单曲循环' : props.repeatMode === 'all' ? '列表循环' : '顺序播放';
   const seekMax = duration || 1;
+  const shownQuality = props.actualQuality !== 'unknown' ? props.actualQuality : props.quality;
+  const activeQuality = props.actualQuality !== 'unknown' ? props.actualQuality : props.quality;
   return <footer className="player">
     <div className="now-playing">
       <button className="cover" aria-label={track ? '打开播放详情页' : '尚未选择歌曲'} disabled={!track}
@@ -185,7 +200,7 @@ export function PlayerBar(props: PlayerBarProps) {
         <strong>{track?.title ?? '尚未选择歌曲'}</strong>
         <span>
           {buffering ? '正在缓冲…' : playing ? '正在播放' : track ? track.artists.map(artist => artist.name).join(' / ') || '未知艺人' : '选择一首歌开始播放'}
-          {props.actualQuality !== 'unknown' ? ` · ${props.actualQuality === 'lossless' ? '无损' : '标准'}` : ''}
+          {props.actualQuality !== 'unknown' ? ` · ${QUALITY_LABELS[props.actualQuality]}` : ''}
         </span>
       </div>
       <button className={`favorite-toggle ${props.favorite ? 'on' : ''}`} aria-label="收藏当前歌曲" aria-pressed={!!props.favorite}
@@ -217,7 +232,22 @@ export function PlayerBar(props: PlayerBarProps) {
       </div>
     </div>
     <div className="volume">
-      <button className="quality-button" onClick={props.onToggleQuality} disabled={!track} title="切换音质（下次取链生效）">{props.quality === 'lossless' ? '无损' : '标准'}</button>
+      <div className="quality-wrap">
+        <button className="quality-button" onClick={props.onToggleQualityMenu} disabled={!track} title="选择音质（立即以当前进度换流）">{QUALITY_LABELS[shownQuality]}</button>
+        {props.qualityMenuOpen && <>
+          <div className="menu-backdrop" onClick={props.onToggleQualityMenu} />
+          <div className="quality-menu" role="menu" aria-label="音质选择">
+            {qualityMenuOptions(track).map(option => (
+              <button key={option.quality} role="menuitem" aria-pressed={option.quality === activeQuality}
+                className={`quality-item ${option.quality === activeQuality ? 'active' : ''}`}
+                onClick={() => props.onChangeQuality(option.quality)}>
+                <span>{QUALITY_LABELS[option.quality]}</span>
+                <small>{option.format ?? ''}</small>
+              </button>
+            ))}
+          </div>
+        </>}
+      </div>
       <button className="pill-button" aria-label="歌词" aria-pressed={props.lyricsOpen} onClick={props.onToggleLyrics} disabled={!track}>
         <ChevronUp size={13} />词
       </button>

@@ -31,8 +31,9 @@ export const DEFAULT_SETTINGS = Object.freeze({
 
 import { isSafeResourceUrl } from '../safe-media-url.mjs';
 import { sanitizeShortcuts } from '../shared/shortcuts.mjs';
+import { QUALITY_ORDER } from '../shared/qualities.mjs';
 const CLOSE_BEHAVIORS = new Set(['quit', 'tray']);
-const QUALITIES = new Set(['standard', 'lossless']);
+const QUALITIES = new Set(QUALITY_ORDER);
 const REPEAT_MODES = new Set(['off', 'all', 'one']);
 const ACCENTS = new Set(['red', 'blue', 'green', 'amber', 'violet', 'custom']);
 const FONT_CHOICES = new Set(['sans', 'serif', 'mono', 'custom']);
@@ -114,6 +115,22 @@ export function sanitizeDesktopLyrics(input, fallback = DEFAULT_SETTINGS.desktop
 
 const MAX_QUEUE_TRACKS = 10000;
 
+function sanitizeQualities(value) {
+  if (!Array.isArray(value)) return undefined;
+  const byQuality = new Map();
+  for (const item of value) {
+    const quality = item && typeof item === 'object' ? item.quality : undefined;
+    if (typeof quality !== 'string' || !QUALITIES.has(quality) || byQuality.has(quality)) continue;
+    byQuality.set(quality, {
+      quality,
+      format: typeof item.format === 'string' && item.format ? item.format : undefined,
+      fileSize: typeof item.fileSize === 'number' && Number.isFinite(item.fileSize) && item.fileSize >= 0 ? item.fileSize : undefined,
+    });
+  }
+  if (!byQuality.size) return undefined;
+  return QUALITY_ORDER.filter(quality => byQuality.has(quality)).map(quality => byQuality.get(quality));
+}
+
 function sanitizeTrack(value) {
   if (!value || typeof value !== 'object') return null;
   const id = typeof value.id === 'string' ? value.id : '';
@@ -128,13 +145,16 @@ function sanitizeTrack(value) {
     : [];
   const album = value.album && typeof value.album.id === 'string' && typeof value.album.title === 'string'
     ? { id: value.album.id, title: value.album.title } : undefined;
-  return {
+  const track = {
     id, title, artists, album,
     coverUrl: typeof value.coverUrl === 'string' && isSafeResourceUrl(value.coverUrl) ? value.coverUrl : undefined,
     durationSeconds: typeof value.durationSeconds === 'number' && Number.isFinite(value.durationSeconds)
       ? value.durationSeconds : undefined,
     available: value.available !== false,
   };
+  const qualities = sanitizeQualities(value.qualities);
+  if (qualities) track.qualities = qualities;
+  return track;
 }
 
 /** @returns {import('../shared/types').SavedQueue | null} */
