@@ -152,7 +152,8 @@ try {
   assert.ok(outerBytes.includes(Buffer.from('Nullsoft')) || outerBytes.includes(Buffer.from('NSIS Error')),
     'installer wrapper is not a Nullsoft (NSIS) package');
   assert.equal(appPe.machine, 0x8664, 'application is not Windows x64');
-  // The icon must be our own artwork: a brand-green rounded square with a light glyph.
+  // The icon must be our own artwork: a white rounded square carrying a layered blue-violet
+  // mark (the magenta/cyan/blue ellipses composite) with a white note.
   // <out>/win-unpacked/resources/app.asar -> <out>/.icon-ico/icon.ico (written by electron-builder).
   const ico = readIcoEntries(await readFile(join(unpackedArchive, '..', '..', '..', '.icon-ico', 'icon.ico')));
   assert.ok(ico.length >= 6, `expected a full icon size set, got ${ico.length}`);
@@ -163,22 +164,21 @@ try {
     const at = (y * art.width + x) * art.channels;
     return [...art.pixels.subarray(at, at + 3), art.channels === 4 ? art.pixels[at + 3] : 255];
   };
-  const near = (value, target, tolerance = 26) => value.every((channel, index) => Math.abs(channel - target[index]) <= tolerance);
-  // Rounded corners are transparent, so judge the artwork by coverage: a mostly brand-green
-  // field with a light glyph on top. The stock Electron icon fails both ratios.
-  let brand = 0, light = 0, sampled = 0;
+  // Rounded corners are transparent, so judge the artwork by coverage: a mostly white field
+  // with a large blue-violet mark. The stock Electron icon is a dark slate field and fails both.
+  let white = 0, violet = 0, sampled = 0;
   for (let y = 0; y < art.height; y += 2) for (let x = 0; x < art.width; x += 2) {
     const [r, g, b, a] = pixel(x, y);
     if (a < 8) continue;
     sampled++;
-    if (near([r, g, b], [27, 64, 55])) brand++;
-    if (near([r, g, b], [242, 251, 240], 60)) light++;
+    if (r > 215 && g > 215 && b > 215) white++;
+    if (b > 170 && b > r + 30) violet++;
   }
-  const brandRatio = brand / sampled;
-  const lightRatio = light / sampled;
-  assert.ok(brandRatio > 0.3, `icon background is not the brand colour (${brandRatio.toFixed(3)})`);
-  assert.ok(lightRatio > 0.01 && lightRatio < 0.6, `unexpected glyph coverage ${lightRatio.toFixed(3)}`);
-  const iconCoverage = { brand: Number(brandRatio.toFixed(3)), glyph: Number(lightRatio.toFixed(3)) };
+  const whiteRatio = white / sampled;
+  const violetRatio = violet / sampled;
+  assert.ok(whiteRatio > 0.25, `icon background is not the white artwork field (${whiteRatio.toFixed(3)})`);
+  assert.ok(violetRatio > 0.3, `icon mark is not the blue-violet artwork (${violetRatio.toFixed(3)})`);
+  const iconCoverage = { white: Number(whiteRatio.toFixed(3)), mark: Number(violetRatio.toFixed(3)) };
   assert.equal(appPe.signed, false, 'expected an explicitly unsigned internal build');
   assert.equal(wrapperPe.signed, false);
   assert.ok(appBytes.includes(Buffer.from('asInvoker')), 'application execution manifest must not request elevation');
